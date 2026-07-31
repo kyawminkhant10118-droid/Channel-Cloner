@@ -3,276 +3,357 @@ import re
 import time
 import asyncio
 import logging
+import aiosqlite
 from pyrogram import Client, filters, idle
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.errors import FloodWait
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo
+from pyrogram.errors import FloodWait, ChatForwardsRestricted
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# --- Configuration Variables ---
+# --- Environment Variables ---
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 OWNER_ID = int(os.environ.get("OWNER_ID", 0))
 
-# Dynamic In-Memory Memory Sets (Bot Run နေစဉ် စိတ်ကြိုက် ပြင်ဆင်နိုင်သည်)
-SOURCES = set()
-DESTS = set()
-
-# Railway မှ တန်ဖိုးများကို စတင် Load လုပ်ခြင်း
-env_sources = os.environ.get("SOURCES", "")
-if env_sources:
-    for x in env_sources.split(","):
-        x = x.strip()
-        if x:
-            SOURCES.add(int(x) if x.lstrip('-').isdigit() else x)
-
-env_dests = os.environ.get("DESTS", "")
-if env_dests:
-    for x in env_dests.split(","):
-        x = x.strip()
-        if x:
-            DESTS.add(int(x) if x.lstrip('-').isdigit() else x)
-
-# Control Settings
-IS_PAUSED = False
-REMOVE_LINKS = os.environ.get("REMOVE_LINKS", "False").lower() == "true"
-REMOVE_USERNAMES = os.environ.get("REMOVE_USERNAMES", "False").lower() == "true"
+# --- Global Variables & Caches ---
+DB_FILE = "cloner_god.db"
 CLONED_COUNT = 0
 START_TIME = time.time()
+MEDIA_GROUPS = {} # Media Group/Album များကို ထိန်းချုပ်ရန်
 
 # Clients
 userbot = Client("userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 bot = Client("controller_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # ==========================================
-# 🎛 UI CONTROL PANEL BUTTONS
+# 💾 DATABASE CONTROLLER (SQLite)
 # ==========================================
-def get_main_menu():
-    pause_btn = "▶️ Resume" if IS_PAUSED else "⏸ Pause"
-    link_btn = "🔗 Links: REMOVE" if REMOVE_LINKS else "🔗 Links: KEEP"
-    usr_btn = "👤 Usernames: REMOVE" if REMOVE_USERNAMES else "👤 Usernames: KEEP"
+async def init_db():
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS config (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS routes (
+                source_id INTEGER,
+                dest_id INTEGER,
+                PRIMARY KEY (source_id, dest_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS replacements (
+                old_text TEXT PRIMARY KEY,
+                new_text TEXT
+            )
+        """)
+        # Default Settings
+        defaults = [
+            ("is_paused", "false"),
+            ("remove_links", "false"),
+            ("remove_usernames", "false"),
+            ("header_text", ""),
+            ("footer_text", "")
+        ]
+        for key, val in defaults:
+            await db.execute("INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)", (key, val))
+        await db.commit()
+
+async def get_config(key, default=""):
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute("SELECT value FROM config WHERE key = ?", (key,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else default
+
+async def set_config(key, value):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, str(value)))
+        await db.commit()
+
+async def get_routes(source_id=None):
+    async with aiosqlite.connect(DB_FILE) as db:
+        if source_id:
+            async with db.execute("SELECT dest_id FROM routes WHERE source_id = ?", (source_id,)) as cursor:
+                rows = await cursor.fetchall()
+                return [r[0] for r in rows]
+        else:
+            async with db.execute("SELECT source_id, dest_id FROM routes") as cursor:
+                return await cursor.fetchall()
+
+async def add_route(source_id, dest_id):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute("INSERT OR IGNORE INTO routes (source_id, dest_id) VALUES (?, ?)", (source_id, dest_id))
+        await db.commit()
+
+async def remove_route(source_id, dest_id):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute("DELETE FROM routes WHERE source_id = ? AND dest_id = ?", (source_id, dest_id))
+        await db.commit()
+
+# ==========================================
+# 🎛 UI CONTROL PANEL
+# ==========================================
+async def get_main_menu():
+    is_paused = (await get_config("is_paused")) == "true"
+    rem_links = (await get_config("remove_links")) == "true"
+    rem_users = (await get_config("remove_usernames")) == "true"
+
+    pause_btn = "▶️ Resume Bot" if is_paused else "⏸ Pause Bot"
+    link_btn = "✅ Remove Links" if rem_links else "❌ Remove Links"
+    usr_btn = "✅ Remove Usernames" if rem_users else "❌ Remove Usernames"
 
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"Status: {'⏸ Paused' if IS_PAUSED else '▶️ Running'}", callback_data="none")],
+        [InlineKeyboardButton(f"State: {'⏸ PAUSED' if is_paused else '▶️ RUNNING'}", callback_data="none")],
         [InlineKeyboardButton(pause_btn, callback_data="toggle_pause")],
         [InlineKeyboardButton(link_btn, callback_data="toggle_links"), InlineKeyboardButton(usr_btn, callback_data="toggle_usernames")],
-        [InlineKeyboardButton("📋 List Channels", callback_data="list_channels")],
-        [InlineKeyboardButton("📊 Check Stats", callback_data="view_stats")]
+        [InlineKeyboardButton("🔀 Route Manager", callback_data="view_routes"), InlineKeyboardButton("📊 Statistics", callback_data="view_stats")]
     ])
 
 # ==========================================
-# 🤖 BOT COMMANDS (အပြည့်အဝ Control ပြုလုပ်ရန်)
+# 🤖 BOT COMMANDS
 # ==========================================
-
 @bot.on_message(filters.command(["start", "menu"]) & filters.user(OWNER_ID))
 async def start_cmd(client, message):
     await message.reply_text(
-        "🎛 **Master Control Panel**\n\n"
-        "အောက်ပါ Buttons များ သို့မဟုတ် Commands များကို သုံး၍ Bot ကို အပြည့်အဝ ထိန်းချုပ်နိုင်ပါသည်။\n\n"
-        "📌 **Commands စာရင်း:**\n"
-        "• `/add_source <ID or @username>` - Source ထည့်ရန်\n"
-        "• `/rm_source <ID or @username>` - Source ဖြုတ်ရန်\n"
-        "• `/add_dest <ID or @username>` - Destination ထည့်ရန်\n"
-        "• `/rm_dest <ID or @username>` - Destination ဖြုတ်ရန်\n"
-        "• `/list` - လက်ရှိ ချိတ်ထားသော Channel များကြည့်ရန်",
-        reply_markup=get_main_menu()
+        "⚡️ **GOD LEVEL CLONER DASHBOARD** ⚡️\n\n"
+        "အောက်ပါ Panel မှတစ်ဆင့် Bot ၏ Settings များကို တိုက်ရိုက် ထိန်းချုပ်နိုင်ပါသည်။\n\n"
+        "🛠 **Routing Commands:**\n"
+        "• `/route <Source_ID> <Dest_ID>` - Route သစ် ချိတ်ရန်\n"
+        "• `/unroute <Source_ID> <Dest_ID>` - Route ဖြုတ်ရန်\n"
+        "• `/routes` - ချိတ်ထားသော Route များ ကြည့်ရန်\n"
+        "• `/set_header <စာသား>` - စာသားထိပ်တွင် တပ်မည့် စာ\n"
+        "• `/set_footer <စာသား>` - စာသားအောက်တွင် တပ်မည့် စာ",
+        reply_markup=await get_main_menu()
     )
 
-# 1. Add Source Channel
-@bot.on_message(filters.command("add_source") & filters.user(OWNER_ID))
-async def add_source_cmd(client, message):
-    if len(message.command) < 2:
-        await message.reply("⚠️ သုံးစွဲပုံ: `/add_source -10012345678` သို့မဟုတ် `/add_source @channelname`")
+@bot.on_message(filters.command("route") & filters.user(OWNER_ID))
+async def route_cmd(client, message):
+    if len(message.command) < 3:
+        await message.reply("⚠️ **Usage:** `/route <Source_ID_or_Username> <Dest_ID_or_Username>`")
         return
     
-    target = message.command[1]
-    chat_id = int(target) if target.lstrip('-').isdigit() else target
-    
+    src, dst = message.command[1], message.command[2]
+    src_id = int(src) if src.lstrip('-').isdigit() else src
+    dst_id = int(dst) if dst.lstrip('-').isdigit() else dst
+
     try:
-        # Auto Cache လုပ်ရန် get_chat အသုံးပြုခြင်း
-        chat = await userbot.get_chat(chat_id)
-        SOURCES.add(chat.id)
-        await message.reply(f"✅ **Source Channel ပေါင်းထည့်ပြီးပါပြီ:**\n**Title:** {chat.title}\n**ID:** `{chat.id}`")
+        src_chat = await userbot.get_chat(src_id)
+        dst_chat = await userbot.get_chat(dst_id)
+        
+        await add_route(src_chat.id, dst_chat.id)
+        await message.reply(f"✅ **Route ချိတ်ဆက်ပြီးပါပြီ!**\n\n📢 **Source:** {src_chat.title} (`{src_chat.id}`)\n🎯 **Dest:** {dst_chat.title} (`{dst_chat.id}`)")
     except Exception as e:
-        await message.reply(f"❌ **Error:** {e}\n\n*Userbot သည် အဆိုပါ Channel ထဲသို့ ဝင်ထားပြီးဖြစ်ကြောင်း သေချာပါစေ။*")
+        await message.reply(f"❌ **Error:** {e}")
 
-# 2. Remove Source Channel
-@bot.on_message(filters.command("rm_source") & filters.user(OWNER_ID))
-async def rm_source_cmd(client, message):
-    if len(message.command) < 2:
-        await message.reply("⚠️ သုံးစွဲပုံ: `/rm_source -10012345678` သို့မဟုတ် `/rm_source @channelname`")
+@bot.on_message(filters.command("unroute") & filters.user(OWNER_ID))
+async def unroute_cmd(client, message):
+    if len(message.command) < 3:
+        await message.reply("⚠️ **Usage:** `/unroute <Source_ID> <Dest_ID>`")
         return
-    
-    target = message.command[1]
-    chat_id = int(target) if target.lstrip('-').isdigit() else target
-    
-    if chat_id in SOURCES:
-        SOURCES.remove(chat_id)
-        await message.reply(f"🗑 Source Channel `{chat_id}` ကို ဖြုတ်လိုက်ပါပြီ။")
-    else:
-        await message.reply("❌ ထို Channel သည် Source စာရင်းထဲတွင် မရှိပါ။")
+    src_id = int(message.command[1])
+    dst_id = int(message.command[2])
+    await remove_route(src_id, dst_id)
+    await message.reply(f"🗑 Route ({src_id} ➔ {dst_id}) ကို ဖြုတ်လိုက်ပါပြီ။")
 
-# 3. Add Destination Channel
-@bot.on_message(filters.command("add_dest") & filters.user(OWNER_ID))
-async def add_dest_cmd(client, message):
-    if len(message.command) < 2:
-        await message.reply("⚠️ သုံးစွဲပုံ: `/add_dest -10012345678` သို့မဟုတ် `/add_dest @channelname`")
+@bot.on_message(filters.command("routes") & filters.user(OWNER_ID))
+async def routes_cmd(client, message):
+    routes = await get_routes()
+    if not routes:
+        await message.reply("❌ ချိတ်ဆက်ထားသော Route မရှိသေးပါ။")
         return
-    
-    target = message.command[1]
-    chat_id = int(target) if target.lstrip('-').isdigit() else target
-    
-    try:
-        chat = await userbot.get_chat(chat_id)
-        DESTS.add(chat.id)
-        await message.reply(f"✅ **Destination Channel ပေါင်းထည့်ပြီးပါပြီ:**\n**Title:** {chat.title}\n**ID:** `{chat.id}`")
-    except Exception as e:
-        await message.reply(f"❌ **Error:** {e}\n\n*Userbot သည် အဆိုပါ Channel ထဲတွင် Admin ဖြစ်ကြောင်း သို့မဟုတ် Member ဝင်ထားကြောင်း သေချာပါစေ။*")
+    text = "🔀 **Active Channel Routes:**\n\n"
+    for s, d in routes:
+        text += f"• `{s}` ➔ `{d}`\n"
+    await message.reply(text)
 
-# 4. Remove Destination Channel
-@bot.on_message(filters.command("rm_dest") & filters.user(OWNER_ID))
-async def rm_dest_cmd(client, message):
-    if len(message.command) < 2:
-        await message.reply("⚠️ သုံးစွဲပုံ: `/rm_dest -10012345678` သို့မဟုတ် `/rm_dest @channelname`")
-        return
-    
-    target = message.command[1]
-    chat_id = int(target) if target.lstrip('-').isdigit() else target
-    
-    if chat_id in DESTS:
-        DESTS.remove(chat_id)
-        await message.reply(f"🗑 Destination Channel `{chat_id}` ကို ဖြုတ်လိုက်ပါပြီ။")
-    else:
-        await message.reply("❌ ထို Channel သည် Destination စာရင်းထဲတွင် မရှိပါ။")
+@bot.on_message(filters.command("set_header") & filters.user(OWNER_ID))
+async def set_header_cmd(client, message):
+    header = message.text.split(maxsplit=1)[1] if len(message.command) > 1 else ""
+    await set_config("header_text", header)
+    await message.reply(f"✅ Header စာသား ပြင်ဆင်ပြီးပါပြီ:\n`{header}`")
 
-# 5. List Channels
-@bot.on_message(filters.command("list") & filters.user(OWNER_ID))
-async def list_cmd(client, message):
-    src_text = "\n".join([f"• `{s}`" for s in SOURCES]) if SOURCES else "မရှိသေးပါ"
-    dst_text = "\n".join([f"• `{d}`" for d in DESTS]) if DESTS else "မရှိသေးပါ"
-    
-    await message.reply(f"📢 **Sources:**\n{src_text}\n\n🎯 **Destinations:**\n{dst_text}")
+@bot.on_message(filters.command("set_footer") & filters.user(OWNER_ID))
+async def set_footer_cmd(client, message):
+    footer = message.text.split(maxsplit=1)[1] if len(message.command) > 1 else ""
+    await set_config("footer_text", footer)
+    await message.reply(f"✅ Footer စာသား ပြင်ဆင်ပြီးပါပြီ:\n`{footer}`")
 
 # ==========================================
-# 🔘 INLINE BUTTON HANDLER
+# 🔘 INLINE BUTTON HANDLERS
 # ==========================================
 @bot.on_callback_query(filters.user(OWNER_ID))
-async def callback_handler(client, query):
-    global IS_PAUSED, REMOVE_LINKS, REMOVE_USERNAMES
-    
+async def cb_handler(client, query):
     data = query.data
     
     if data == "toggle_pause":
-        IS_PAUSED = not IS_PAUSED
-        state = "ခဏရပ်ထားပါသည်" if IS_PAUSED else "ပြန်လည်စတင်ပါပြီ"
-        await query.answer(f"Bot ကို {state}။", show_alert=True)
-        await query.message.edit_reply_markup(reply_markup=get_main_menu())
+        curr = await get_config("is_paused") == "true"
+        await set_config("is_paused", "false" if curr else "true")
+        await query.message.edit_reply_markup(reply_markup=await get_main_menu())
         
     elif data == "toggle_links":
-        REMOVE_LINKS = not REMOVE_LINKS
-        state = "Link များ ဖြုတ်မည်" if REMOVE_LINKS else "Link များ မဖြုတ်ပါ"
-        await query.answer(f"Setting: {state}")
-        await query.message.edit_reply_markup(reply_markup=get_main_menu())
+        curr = await get_config("remove_links") == "true"
+        await set_config("remove_links", "false" if curr else "true")
+        await query.message.edit_reply_markup(reply_markup=await get_main_menu())
 
     elif data == "toggle_usernames":
-        REMOVE_USERNAMES = not REMOVE_USERNAMES
-        state = "Usernames များ ဖြုတ်မည်" if REMOVE_USERNAMES else "Usernames များ မဖြုတ်ပါ"
-        await query.answer(f"Setting: {state}")
-        await query.message.edit_reply_markup(reply_markup=get_main_menu())
+        curr = await get_config("remove_usernames") == "true"
+        await set_config("remove_usernames", "false" if curr else "true")
+        await query.message.edit_reply_markup(reply_markup=await get_main_menu())
 
-    elif data == "list_channels":
-        src_text = "\n".join([f"• `{s}`" for s in SOURCES]) if SOURCES else "မရှိသေးပါ"
-        dst_text = "\n".join([f"• `{d}`" for d in DESTS]) if DESTS else "မရှိသေးပါ"
-        await query.message.reply(f"📢 **Active Sources:**\n{src_text}\n\n🎯 **Active Destinations:**\n{dst_text}")
+    elif data == "view_routes":
+        routes = await get_routes()
+        text = "🔀 **Active Routes:**\n" + "\n".join([f"• `{s}` ➔ `{d}`" for s, d in routes]) if routes else "မရှိသေးပါ"
+        await query.message.reply(text)
         await query.answer()
 
     elif data == "view_stats":
         uptime = round((time.time() - START_TIME) / 3600, 2)
-        state_text = "Paused ⏸" if IS_PAUSED else "Running ▶️"
-        
-        text = f"📊 **Bot Statistics**\n\n"
-        text += f"▪️ State: `{state_text}`\n"
-        text += f"▪️ Cloned Messages: `{CLONED_COUNT}`\n"
-        text += f"▪️ Uptime: `{uptime} Hours`\n"
-        text += f"▪️ Sources Count: `{len(SOURCES)}`\n"
-        text += f"▪️ Dests Count: `{len(DESTS)}`"
-        
-        await query.answer()
+        routes = await get_routes()
+        text = f"📊 **God Level Stats**\n\n• Cloned: `{CLONED_COUNT}`\n• Uptime: `{uptime} Hours`\n• Active Routes: `{len(routes)}`"
         await query.message.reply(text)
+        await query.answer()
 
 # ==========================================
-# 🔄 DYNAMIC USERBOT CLONER LOGIC
+# 🖼 ADVANCED TEXT & MEDIA PROCESSING
 # ==========================================
-
-# Text processing function
-def process_caption(text):
+async def process_text(text):
     if not text:
         return text
-    if REMOVE_LINKS:
+    
+    rem_links = (await get_config("remove_links")) == "true"
+    rem_users = (await get_config("remove_usernames")) == "true"
+    header = await get_config("header_text")
+    footer = await get_config("footer_text")
+
+    if rem_links:
         text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
-    if REMOVE_USERNAMES:
+    if rem_users:
         text = re.sub(r'@[a-zA-Z0-9_]+', '', text)
-    return text
 
-# Custom Filter to dynamically match active SOURCES
-async def dynamic_sources_filter(_, __, message):
-    if IS_PAUSED or not SOURCES:
-        return False
-    chat_id = message.chat.id
-    username = f"@{message.chat.username}" if message.chat.username else None
-    return (chat_id in SOURCES) or (username in SOURCES)
+    if header:
+        text = f"{header}\n\n{text}"
+    if footer:
+        text = f"{text}\n\n{footer}"
+        
+    return text.strip()
 
-source_filter = filters.create(dynamic_sources_filter)
+# Bypass Restricted Content (Download & Re-upload Engine)
+async def send_restricted_media(dest, message, caption):
+    file_path = await userbot.download_media(message)
+    try:
+        if message.photo:
+            await userbot.send_photo(dest, photo=file_path, caption=caption)
+        elif message.video:
+            await userbot.send_video(dest, video=file_path, caption=caption)
+        elif message.document:
+            await userbot.send_document(dest, document=file_path, caption=caption)
+        elif message.audio:
+            await userbot.send_audio(dest, audio=file_path, caption=caption)
+        elif message.voice:
+            await userbot.send_voice(dest, voice=file_path, caption=caption)
+    finally:
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
 
-@userbot.on_message(source_filter)
-async def userbot_cloner(client, message):
+# ==========================================
+# 🔄 CLONER ENGINE (ALBUM & ROUTING)
+# ==========================================
+@userbot.on_message(filters.group | filters.channel)
+async def god_cloner_engine(client, message):
     global CLONED_COUNT
+    
+    if (await get_config("is_paused")) == "true":
+        return
 
-    original_text = message.text or message.caption or ""
-    new_text = process_caption(original_text)
+    # Check Route Exists
+    dests = await get_routes(message.chat.id)
+    if not dests:
+        return
 
-    for dest in list(DESTS):
+    # Album (Media Group) Handling
+    if message.media_group_id:
+        mg_id = message.media_group_id
+        if mg_id not in MEDIA_GROUPS:
+            MEDIA_GROUPS[mg_id] = [message]
+            await asyncio.sleep(2) # Album ၏ Media အားလုံး ရောက်အောင် စောင့်ခြင်း
+            
+            messages = MEDIA_GROUPS.pop(mg_id, [])
+            for dest in dests:
+                try:
+                    # Direct Copying Album
+                    await userbot.copy_media_group(dest, message.chat.id, messages[0].id)
+                    CLONED_COUNT += len(messages)
+                except ChatForwardsRestricted:
+                    # Download & Re-upload Restricted Album
+                    media_list = []
+                    files = []
+                    for m in messages:
+                        f = await userbot.download_media(m)
+                        files.append(f)
+                        cap = await process_text(m.caption or "")
+                        if m.photo:
+                            media_list.append(InputMediaPhoto(f, caption=cap))
+                        elif m.video:
+                            media_list.append(InputMediaVideo(f, caption=cap))
+                    
+                    await userbot.send_media_group(dest, media_list)
+                    for f in files:
+                        if os.path.exists(f): os.remove(f)
+                    CLONED_COUNT += len(messages)
+                except Exception as e:
+                    logger.error(f"Album Error: {e}")
+        else:
+            MEDIA_GROUPS[mg_id].append(message)
+        return
+
+    # Single Message Handling
+    caption = await process_text(message.text or message.caption or "")
+    for dest in dests:
         try:
             if message.text:
-                await userbot.send_message(dest, new_text)
+                await userbot.send_message(dest, caption)
             else:
-                await message.copy(dest, caption=new_text)
-                
+                await message.copy(dest, caption=caption)
             CLONED_COUNT += 1
-            await asyncio.sleep(2.5) # Anti-flood delay
+            await asyncio.sleep(2)
 
+        except ChatForwardsRestricted:
+            # Restricted/Protected Content တွေ့ပါက Auto Download လုပ်၍ တင်ပေးခြင်း
+            logger.info("Restricted Content တွေ့ရှိသဖြင့် Download/Upload စနစ်ဖြင့် ကူးပါမည်...")
+            await send_restricted_media(dest, message, caption)
+            CLONED_COUNT += 1
         except FloodWait as e:
-            logger.warning(f"FloodWait: {e.value} စက္ကန့် စောင့်ပါမည်...")
             await asyncio.sleep(e.value + 2)
-            await message.copy(dest, caption=new_text)
+            await message.copy(dest, caption=caption)
             CLONED_COUNT += 1
         except Exception as e:
-            logger.error(f"Error copying to {dest}: {e}")
+            logger.error(f"Cloning Error: {e}")
 
 # ==========================================
-# 🚀 MAIN RUNNER WITH AUTO-CACHE
+# 🚀 MAIN RUNNER
 # ==========================================
 async def main():
-    logger.info("Userbot စတင်နေပါသည်...")
-    await userbot.start()
+    await init_db()
+    logger.info("💾 SQLite Database စတင်ပါပြီ...")
     
-    logger.info("Controller Bot စတင်နေပါသည်...")
+    await userbot.start()
     await bot.start()
-
-    # Pre-cache Sources and Destinations
-    logger.info("Channels များကို Auto-Cache လုပ်နေပါသည်...")
-    all_chats = list(SOURCES) + list(DESTS)
-    for c_id in all_chats:
+    
+    # Auto-Cache Active Routes
+    routes = await get_routes()
+    for s, d in routes:
         try:
-            await userbot.get_chat(c_id)
-            logger.info(f"✅ Chat Cached: {c_id}")
+            await userbot.get_chat(s)
+            await userbot.get_chat(d)
         except Exception as e:
-            logger.error(f"❌ Cache Error ({c_id}): {e}")
+            logger.error(f"Cache Error ({s} -> {d}): {e}")
 
-    logger.info("✅ Full Control Cloner Bot အဆင်သင့်ဖြစ်ပါပြီ!")
+    logger.info("🚀 GOD LEVEL CLONER IS ONLINE!")
     await idle()
     
     await userbot.stop()
