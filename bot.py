@@ -22,9 +22,9 @@ OWNER_ID = int(os.environ.get("OWNER_ID", 0))
 DB_FILE = "cloner_god.db"
 CLONED_COUNT = 0
 START_TIME = time.time()
-MEDIA_GROUPS = {} # Media Group/Album များကို ထိန်းချုပ်ရန်
+MEDIA_GROUPS = {} # Album/Media Groups များ ထိန်းချုပ်ရန်
 
-# Clients
+# Clients Initializing
 userbot = Client("userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 bot = Client("controller_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -46,13 +46,6 @@ async def init_db():
                 PRIMARY KEY (source_id, dest_id)
             )
         """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS replacements (
-                old_text TEXT PRIMARY KEY,
-                new_text TEXT
-            )
-        """)
-        # Default Settings
         defaults = [
             ("is_paused", "false"),
             ("remove_links", "false"),
@@ -65,10 +58,13 @@ async def init_db():
         await db.commit()
 
 async def get_config(key, default=""):
-    async with aiosqlite.connect(DB_FILE) as db:
-        async with db.execute("SELECT value FROM config WHERE key = ?", (key,)) as cursor:
-            row = await cursor.fetchone()
-            return row[0] if row else default
+    try:
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute("SELECT value FROM config WHERE key = ?", (key,)) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else default
+    except Exception:
+        return default
 
 async def set_config(key, value):
     async with aiosqlite.connect(DB_FILE) as db:
@@ -76,14 +72,17 @@ async def set_config(key, value):
         await db.commit()
 
 async def get_routes(source_id=None):
-    async with aiosqlite.connect(DB_FILE) as db:
-        if source_id:
-            async with db.execute("SELECT dest_id FROM routes WHERE source_id = ?", (source_id,)) as cursor:
-                rows = await cursor.fetchall()
-                return [r[0] for r in rows]
-        else:
-            async with db.execute("SELECT source_id, dest_id FROM routes") as cursor:
-                return await cursor.fetchall()
+    try:
+        async with aiosqlite.connect(DB_FILE) as db:
+            if source_id:
+                async with db.execute("SELECT dest_id FROM routes WHERE source_id = ?", (source_id,)) as cursor:
+                    rows = await cursor.fetchall()
+                    return [r[0] for r in rows]
+            else:
+                async with db.execute("SELECT source_id, dest_id FROM routes") as cursor:
+                    return await cursor.fetchall()
+    except Exception:
+        return []
 
 async def add_route(source_id, dest_id):
     async with aiosqlite.connect(DB_FILE) as db:
@@ -122,7 +121,7 @@ async def start_cmd(client, message):
     await message.reply_text(
         "⚡️ **GOD LEVEL CLONER DASHBOARD** ⚡️\n\n"
         "အောက်ပါ Panel မှတစ်ဆင့် Bot ၏ Settings များကို တိုက်ရိုက် ထိန်းချုပ်နိုင်ပါသည်။\n\n"
-        "🛠 **Routing Commands:**\n"
+        "🛠 **Commands များ:**\n"
         "• `/route <Source_ID> <Dest_ID>` - Route သစ် ချိတ်ရန်\n"
         "• `/unroute <Source_ID> <Dest_ID>` - Route ဖြုတ်ရန်\n"
         "• `/routes` - ချိတ်ထားသော Route များ ကြည့်ရန်\n"
@@ -155,10 +154,13 @@ async def unroute_cmd(client, message):
     if len(message.command) < 3:
         await message.reply("⚠️ **Usage:** `/unroute <Source_ID> <Dest_ID>`")
         return
-    src_id = int(message.command[1])
-    dst_id = int(message.command[2])
-    await remove_route(src_id, dst_id)
-    await message.reply(f"🗑 Route ({src_id} ➔ {dst_id}) ကို ဖြုတ်လိုက်ပါပြီ။")
+    try:
+        src_id = int(message.command[1])
+        dst_id = int(message.command[2])
+        await remove_route(src_id, dst_id)
+        await message.reply(f"🗑 Route ({src_id} ➔ {dst_id}) ကို ဖြုတ်လိုက်ပါပြီ။")
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
 
 @bot.on_message(filters.command("routes") & filters.user(OWNER_ID))
 async def routes_cmd(client, message):
@@ -242,7 +244,7 @@ async def process_text(text):
         
     return text.strip()
 
-# Bypass Restricted Content (Download & Re-upload Engine)
+# Protected/Restricted Content Download & Upload Engine
 async def send_restricted_media(dest, message, caption):
     file_path = await userbot.download_media(message)
     try:
@@ -261,7 +263,7 @@ async def send_restricted_media(dest, message, caption):
             os.remove(file_path)
 
 # ==========================================
-# 🔄 CLONER ENGINE (ALBUM & ROUTING)
+# 🔄 CLONER ENGINE
 # ==========================================
 @userbot.on_message(filters.group | filters.channel)
 async def god_cloner_engine(client, message):
@@ -270,7 +272,7 @@ async def god_cloner_engine(client, message):
     if (await get_config("is_paused")) == "true":
         return
 
-    # Check Route Exists
+    # Check Routes
     dests = await get_routes(message.chat.id)
     if not dests:
         return
@@ -280,16 +282,14 @@ async def god_cloner_engine(client, message):
         mg_id = message.media_group_id
         if mg_id not in MEDIA_GROUPS:
             MEDIA_GROUPS[mg_id] = [message]
-            await asyncio.sleep(2) # Album ၏ Media အားလုံး ရောက်အောင် စောင့်ခြင်း
+            await asyncio.sleep(2) # Album Media အားလုံး စောင့်ခြင်း
             
             messages = MEDIA_GROUPS.pop(mg_id, [])
             for dest in dests:
                 try:
-                    # Direct Copying Album
                     await userbot.copy_media_group(dest, message.chat.id, messages[0].id)
                     CLONED_COUNT += len(messages)
                 except ChatForwardsRestricted:
-                    # Download & Re-upload Restricted Album
                     media_list = []
                     files = []
                     for m in messages:
@@ -323,8 +323,7 @@ async def god_cloner_engine(client, message):
             await asyncio.sleep(2)
 
         except ChatForwardsRestricted:
-            # Restricted/Protected Content တွေ့ပါက Auto Download လုပ်၍ တင်ပေးခြင်း
-            logger.info("Restricted Content တွေ့ရှိသဖြင့် Download/Upload စနစ်ဖြင့် ကူးပါမည်...")
+            logger.info("Restricted Content တွေ့သဖြင့် Download/Upload လုပ်နေသည်...")
             await send_restricted_media(dest, message, caption)
             CLONED_COUNT += 1
         except FloodWait as e:
@@ -344,14 +343,14 @@ async def main():
     await userbot.start()
     await bot.start()
     
-    # Auto-Cache Active Routes
+    # Auto-Cache Channels (Safe Exception Handling)
     routes = await get_routes()
     for s, d in routes:
         try:
             await userbot.get_chat(s)
             await userbot.get_chat(d)
         except Exception as e:
-            logger.error(f"Cache Error ({s} -> {d}): {e}")
+            logger.error(f"Cache Warning ({s} -> {d}): {e}")
 
     logger.info("🚀 GOD LEVEL CLONER IS ONLINE!")
     await idle()
