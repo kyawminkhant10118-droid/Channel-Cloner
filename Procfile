@@ -1,1 +1,1 @@
-worker: python cloner.py
+worker: python bot.py
