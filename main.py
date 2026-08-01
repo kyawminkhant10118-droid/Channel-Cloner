@@ -18,14 +18,14 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return " Ultimate Omni-Feature VIP Engine v11.0 is Live!"
+    return " Ultimate Supreme VIP Engine v13.0 is Live!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 # --- Telegram Native Client & Safe Imports ---
-from telethon import TelegramClient, events, errors, functions, types
+from telethon import TelegramClient, events, errors, functions, types, Button
 from telethon.sessions import StringSession
 
 # --- 2. Telegram API Credentials ---
@@ -35,7 +35,7 @@ SESSION_STRING = os.environ.get("SESSION_STRING")
 
 # --- 3. Engine Configuration ---
 CONCURRENT_WORKERS = 8
-DB_FILE = "ultimate_db.json"
+DB_FILE = "ultimate_db_v13.json"
 TEMP_DIR = "temp_downloads"
 THUMB_PATH = "custom_thumb.jpg"
 
@@ -47,13 +47,16 @@ def load_db():
         except Exception:
             pass
     return {
-        "target_channel": -1003351682369,
+        "target_channels": [-1003351682369],  # Support multiple targets now
+        "log_channel": None,
         "sources": [],
         "duplicates": [],
+        "blacklist_words": ["casino", "1xbet", "bet", "18+"],
+        "custom_button": {"text": " Join Main Channel", "url": "https://t.me/+0000000000"},
         "daily_stats": {},
         "crawler_progress": {},
         "header": " **[VIP EXCLUSIVE CONTENT]** ",
-        "watermark": " **Powered by VIP Premium Engine**",
+        "watermark": " **Powered by Supreme VIP Engine**",
         "footer": "",
         "media_filter": "all",
         "replace_link": "",
@@ -97,6 +100,14 @@ bot = TelegramClient(
     retry_delay=1
 )
 
+def check_blacklist(text):
+    if not text: return False
+    text_lower = text.lower()
+    for word in DB.get("blacklist_words", []):
+        if word.lower() in text_lower:
+            return True
+    return False
+
 def build_caption(original_text):
     caption = original_text or ""
     rep_link = DB.get("replace_link")
@@ -123,57 +134,77 @@ def build_caption(original_text):
     
     return "\n\n".join(parts)
 
-# ---  ZERO-DISK TRANSFER ENGINE ---
+async def send_log(text):
+    log_chat = DB.get("log_channel")
+    if log_chat:
+        try:
+            await bot.send_message(log_chat, f" **SUPREME LOG:** {text}")
+        except:
+            pass
+
+# ---  MULTI-TARGET ZERO-DISK TRANSFER ENGINE ---
 async def safe_upload(message, caption):
-    target = DB.get("target_channel")
-    if not target: return False
+    targets = DB.get("target_channels", [])
+    if not targets: return False
+
+    if check_blacklist(message.text):
+        return False
 
     file_id = str(message.media.document.id) if (message.video or message.document) else None
     if file_id and file_id in DB.get("duplicates", []): return False
 
     thumb_to_use = THUMB_PATH if os.path.exists(THUMB_PATH) else None
-
     delay = DB.get("delay_seconds", 0)
     if delay > 0:
         await asyncio.sleep(delay)
 
-    try:
-        if not thumb_to_use and message.media:
-            sent_msg = await bot.send_file(
-                target, message.media, caption=caption.strip(), supports_streaming=True
-            )
-            if sent_msg:
-                if file_id: DB["duplicates"].append(file_id)
-                today = datetime.now().strftime("%Y-%m-%d")
-                DB["daily_stats"][today] = DB["daily_stats"].get(today, 0) + 1
-                save_db()
-                return True
-    except Exception:
-        pass
+    # Prepare custom inline buttons if configured
+    buttons = None
+    c_btn = DB.get("custom_button")
+    if c_btn and c_btn.get("text") and c_btn.get("url"):
+        buttons = [[Button.url(c_btn["text"], c_btn["url"])]]
 
-    while True:
+    success_any = False
+    for target in targets:
         try:
-            os.makedirs(TEMP_DIR, exist_ok=True)
-            temp_path = await bot.download_media(message, file=TEMP_DIR)
-            try:
+            if not thumb_to_use and message.media:
                 sent_msg = await bot.send_file(
-                    target, temp_path, caption=caption.strip(), thumb=thumb_to_use,
-                    supports_streaming=True, part_size_kb=1024
+                    target, message.media, caption=caption.strip(), 
+                    buttons=buttons, supports_streaming=True
                 )
-            finally:
-                if temp_path and os.path.exists(temp_path):
-                    os.remove(temp_path)
-
-            if sent_msg:
-                if file_id: DB["duplicates"].append(file_id)
-                today = datetime.now().strftime("%Y-%m-%d")
-                DB["daily_stats"][today] = DB["daily_stats"].get(today, 0) + 1
-                save_db()
-                return True
-        except errors.FloodWaitError as e:
-            await asyncio.sleep(e.seconds + 2)
+                if sent_msg: success_any = True
+                continue
         except Exception:
-            return False
+            pass
+
+        while True:
+            try:
+                os.makedirs(TEMP_DIR, exist_ok=True)
+                temp_path = await bot.download_media(message, file=TEMP_DIR)
+                try:
+                    sent_msg = await bot.send_file(
+                        target, temp_path, caption=caption.strip(), thumb=thumb_to_use,
+                        buttons=buttons, supports_streaming=True, part_size_kb=1024
+                    )
+                finally:
+                    if temp_path and os.path.exists(temp_path):
+                        os.remove(temp_path)
+
+                if sent_msg:
+                    success_any = True
+                    break
+            except errors.FloodWaitError as e:
+                await asyncio.sleep(e.seconds + 2)
+            except Exception:
+                break
+
+    if success_any:
+        if file_id: DB["duplicates"].append(file_id)
+        today = datetime.now().strftime("%Y-%m-%d")
+        DB["daily_stats"][today] = DB["daily_stats"].get(today, 0) + 1
+        save_db()
+        return True
+    return False
 
 # --- Concurrent Parallel Queue Workers ---
 async def queue_worker(worker_id):
@@ -207,7 +238,7 @@ async def clone_old_videos(source_chat):
             elif m_filter == "video" and message.video: match_filter = True
             elif m_filter == "document" and message.document and not message.video: match_filter = True
 
-            if match_filter:
+            if match_filter and not check_blacklist(message.text):
                 caption = build_caption(message.text)
                 await upload_queue.put((message, caption))
                 media_found += 1
@@ -217,8 +248,9 @@ async def clone_old_videos(source_chat):
                 "total": total_msgs, "scanned": scanned, "media_found": media_found, "percent": pct
             }
             if scanned % 50 == 0 or scanned == total_msgs: save_db()
-    except Exception:
-        pass
+        await send_log(f"Finished Supreme cloning source: `{source_chat}`")
+    except Exception as e:
+        await send_log(f"Error in Supreme crawler for `{source_chat}`: `{e}`")
 
 # --- Resolver Helper ---
 async def resolve_and_join(link_or_username):
@@ -243,53 +275,108 @@ async def resolve_and_join(link_or_username):
 async def main():
     await bot.start()
     print("==================================================")
-    print(" ULTIMATE OMNI-FEATURE VIP v11.0 LIVE ")
+    print(" ULTIMATE SUPREME VIP v13.0 LIVE ")
     print("==================================================")
     
     for i in range(1, CONCURRENT_WORKERS + 1):
         asyncio.create_task(queue_worker(i))
 
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]start$'))
-    async def start_cmd(event):
-        target_info = DB.get("target_channel", "Not Set")
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./](start|panel)$'))
+    async def panel_cmd(event):
+        targets_count = len(DB.get("target_channels", []))
         status_val = DB.get("status", "ON")
         tags_status = "" if DB.get("auto_tags") else ""
         ads_status = "" if DB.get("clean_ads") else ""
         
-        menu_text = (
-            " **ULTIMATE OMNI-FEATURE BOT v11.0** \n"
+        panel_text = (
+            " **SUPREME VIP CONTROL PANEL v13.0** \n"
             "\n"
-            f" **Engine Status:** `{status_val}`\n"
-            f" **Target Channel:** `{target_info}`\n"
-            f" **Workers:** `{CONCURRENT_WORKERS} Threads`\n"
+            f" **Status:** `{status_val}` |  **Targets:** `{targets_count} Channels`\n"
+            f" **Threads:** `{CONCURRENT_WORKERS} Threads`\n"
             f" **Auto Tags:** `{tags_status}` |  **Clean Ads:** `{ads_status}`\n"
-            f" **Media Filter:** `{DB.get('media_filter').upper()}`\n"
-            f" **Delay:** `{DB.get('delay_seconds')}s` |  **Queue:** `{upload_queue.qsize()}`\n\n"
-            
-            " **ALL COMMANDS LIST:**\n"
-            " `.on` / `.off` - Engine Switch\n"
-            " `.status` - Visual Progress & Dashboard\n"
-            " `.stats` - Daily Upload Analytics\n"
-            " `.add <Link>` | `.del <Link>` | `.sources`\n"
-            " `.setheader <Text>` - Custom Header\n"
-            " `.setwatermark <Text>` - Custom Watermark\n"
-            " `.setfooter <Text>` - Custom Footer\n"
-            " `.setlink <Link>` - Replace Links/Usernames\n"
-            " `.cleanads` - Toggle Ad Cleaner\n"
-            " `.autotags` - Toggle Genre Tags\n"
-            " `.setdelay <Sec>` - Drip Upload Delay\n"
-            " `.filter <all/video/document>` - Media Filter\n"
-            " `.vip` | `.ping`"
+            f" **Filter:** `{DB.get('media_filter').upper()}` |  **Delay:** `{DB.get('delay_seconds')}s`\n"
+            f" **Queue Pending:** `{upload_queue.qsize()} Files`"
         )
-        await event.respond(menu_text)
+        
+        buttons = [
+            [Button.inline(" Turn ON", b"engine_on"), Button.inline(" Turn OFF", b"engine_off")],
+            [Button.inline(" Dashboard Status", b"btn_status"), Button.inline(" Daily Stats", b"btn_stats")],
+            [Button.inline(" Toggle Tags", b"toggle_tags"), Button.inline(" Toggle Ads", b"toggle_ads")],
+            [Button.inline(" View Sources", b"btn_sources")]
+        ]
+        await event.respond(panel_text, buttons=buttons)
+
+    @bot.on(events.CallbackQuery)
+    async def callback_handler(event):
+        data = event.data.decode('utf-8')
+        if data == "engine_on":
+            DB["status"] = "ON"
+            save_db()
+            await event.answer(" Engine Activated!", alert=True)
+        elif data == "engine_off":
+            DB["status"] = "OFF"
+            save_db()
+            await event.answer(" Engine Deactivated!", alert=True)
+        elif data == "toggle_tags":
+            DB["auto_tags"] = not DB.get("auto_tags", False)
+            save_db()
+            await event.answer(f"Tags: {'ENABLED' if DB['auto_tags'] else 'DISABLED'}", alert=True)
+        elif data == "toggle_ads":
+            DB["clean_ads"] = not DB.get("clean_ads", True)
+            save_db()
+            await event.answer(f"Ad Cleaner: {'ENABLED' if DB['clean_ads'] else 'DISABLED'}", alert=True)
+        elif data == "btn_status":
+            uptime_sec = int(time.time() - start_time)
+            hours, remainder = divmod(uptime_sec, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            vram = psutil.virtual_memory()
+            cpu_pct = psutil.cpu_percent(interval=0.5)
+            await event.answer(f"CPU: {cpu_pct}% | RAM: {vram.percent}% | Uptime: {hours}h {minutes}m", alert=True)
+        elif data == "btn_stats":
+            stats = DB.get("daily_stats", {})
+            total_u = sum(stats.values())
+            await event.answer(f"Total Uploaded Files Recorded: {total_u}", alert=True)
+        elif data == "btn_sources":
+            sources = DB.get("sources", [])
+            await event.answer(f"Active Sources Count: {len(sources)}", alert=True)
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]ping$'))
     async def ping_cmd(event):
-        await event.respond(" **Pong!** Omni-Feature Engine is fully operational.")
+        await event.respond(" **Supreme Pong!** Ultra-responsive server running smoothly.")
 
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]vip$'))
-    async def vip_cmd(event):
-        await event.respond(" **VIP LICENSE:** `Lifetime Unlimited Access (All Features Unlocked)`")
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setthumb$'))
+    async def setthumb_cmd(event):
+        if event.is_reply:
+            reply_msg = await event.get_reply_message()
+            if reply_msg.media:
+                await bot.download_media(reply_msg, file=THUMB_PATH)
+                await event.respond(" **Supreme Custom Thumbnail successfully saved!**")
+                return
+        await event.respond(" Please reply to an image/photo with `.setthumb` to set it as custom thumbnail.")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]addtarget$'))
+    async def addtarget_cmd(event):
+        chat_id = event.chat_id
+        if chat_id not in DB["target_channels"]:
+            DB["target_channels"].append(chat_id)
+            save_db()
+            await event.respond(f" **This chat added as a Target Channel.** (Total: {len(DB['target_channels'])})")
+        else:
+            await event.respond(" This chat is already in target channels list.")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setbtn (.+) \| (.+)'))
+    async def setbtn_cmd(event):
+        btn_text = event.pattern_match.group(1).strip()
+        btn_url = event.pattern_match.group(2).strip()
+        DB["custom_button"] = {"text": btn_text, "url": btn_url}
+        save_db()
+        await event.respond(f" **Custom Inline Button updated:** [{btn_text}]({btn_url})")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setlog$'))
+    async def setlog_cmd(event):
+        DB["log_channel"] = event.chat_id
+        save_db()
+        await event.respond(f" **This chat has been set as the Supreme Log Channel.**")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]on$'))
     async def on_cmd(event):
@@ -383,7 +470,7 @@ async def main():
                 progress_text += f" `{src}`\n  `{p_bar}` **{pct}%** ({data['scanned']}/{data['total']})\n"
 
         status_msg = (
-            " **OMNI-FEATURE DASHBOARD v11.0** \n"
+            " **SUPREME DASHBOARD v13.0** \n"
             "\n"
             f" **Threads:** `{CONCURRENT_WORKERS}` |  **Uptime:** `{hours}h {minutes}m`\n"
             f" **CPU:** `{cpu_pct}%` |  **RAM:** `{vram.percent}%`\n"
@@ -396,7 +483,7 @@ async def main():
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]add (.+)'))
     async def add_cmd(event):
         raw_input = event.pattern_match.group(1).strip()
-        await event.respond(f" **Initializing Smart Crawler...**\n`{raw_input}`")
+        await event.respond(f" **Initializing Supreme Crawler...**\n`{raw_input}`")
         try:
             identifier, title = await resolve_and_join(raw_input)
             src_key = str(identifier)
@@ -451,7 +538,7 @@ async def main():
                 elif m_filter == "video" and event.message.video: match_filter = True
                 elif m_filter == "document" and event.message.document and not event.message.video: match_filter = True
 
-                if match_filter:
+                if match_filter and not check_blacklist(event.message.text):
                     caption = build_caption(event.message.text)
                     await upload_queue.put((event.message, caption))
         except Exception:
@@ -461,4 +548,4 @@ async def main():
 
 if __name__ == '__main__':
     Thread(target=run_web).start()
-    asyncio.run(main())
+    asyncio.main(main())
