@@ -19,7 +19,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Next-Level Ultimate Engine is Live and Running Perfectly!"
+    return "Next-Level Ultimate Dynamic Engine is Live!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -28,7 +28,6 @@ def run_web():
 # --- 2. Telegram API Credentials ---
 API_ID = 38078790
 API_HASH = 'c1b7e324a99544d7a9229ff5324af362'
-TARGET_CHANNEL = -1003351682369  
 SESSION_STRING = os.environ.get("SESSION_STRING")
 
 # --- 3. Persistent JSON Database Setup ---
@@ -42,6 +41,7 @@ def load_db():
         except Exception as e:
             print(f"[-] DB Read Error: {e}")
     return {
+        "target_channel": -1003351682369,  # Default Target Channel
         "sources": [],
         "priority_sources": [],
         "duplicates": [],
@@ -77,6 +77,11 @@ async def session_refresher():
 
 # --- Anti-Flood Safe Upload Processor ---
 async def safe_upload(message, caption):
+    target = DB.get("target_channel")
+    if not target:
+        print("[-] Target Channel စာရင်း မရှိသေးပါ။ /settarget ဖြင့် အရင် သတ်မှတ်ပေးပါ။")
+        return False
+
     file_id = None
     if message.video:
         file_id = str(message.media.document.id)
@@ -90,13 +95,16 @@ async def safe_upload(message, caption):
 
     while True:
         try:
-            sent_msg = await bot.send_file(TARGET_CHANNEL, message.media, caption=caption.strip())
+            sent_msg = await bot.send_file(target, message.media, caption=caption.strip())
             
             if file_id:
                 DB["duplicates"].append(file_id)
 
             title = message.text.split("\n")[0][:50] if message.text else "Unknown Movie"
-            msg_link = f"https://t.me/c/{str(TARGET_CHANNEL).replace('-100','')}/{sent_msg.id}"
+            
+            # Channel Link Format
+            clean_target = str(target).replace('-100', '')
+            msg_link = f"https://t.me/c/{clean_target}/{sent_msg.id}"
             DB["catalog"][title.lower()] = {"title": title, "link": msg_link}
 
             today = datetime.now().strftime("%Y-%m-%d")
@@ -139,26 +147,56 @@ async def clone_old_videos(source_chat):
 async def main():
     await bot.start()
     print("==================================================")
-    print("🚀 ULTRA ENGINE USERBOT IS ONLINE & READY!")
+    print("🚀 ULTRA DYNAMIC ENGINE USERBOT IS ONLINE & READY!")
     print("==================================================")
     
     asyncio.create_task(session_refresher())
 
-    # --- Commands Handler (Outgoing=True မှန်သမျှ ဆရာကြီး ရိုက်လိုက်သည့် Command များ ဖြစ်သည်) ---
+    # --- Start & Help Menu Command ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/start$', outgoing=True))
     async def start_cmd(event):
+        target_info = DB.get("target_channel", "မသတ်မှတ်ရသေးပါ")
         menu_text = (
-            "👑 **ULTRA NEXT-LEVEL USERBOT ENGINE** 👑\n\n"
+            "👑 **ULTRA NEXT-LEVEL USERBOT ENGINE** 👑\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 **လက်ရှိ Target Channel:** `{target_info}`\n\n"
+            "📌 **TARGET & SOURCES MANAGEMENT:**\n"
+            "• `/settarget ID/Username` - ရုပ်ရှင်များ တင်မည့် Target Channel ပြောင်းရန်\n"
             "• `/add @username` - Source ချန်နယ်အသစ်ထည့်၍ ကားဟောင်းများ Auto တင်ရန်\n"
-            "• `/priority @username` - [Priority Watchlist] ဦးစားပေး ချန်နယ်သတ်မှတ်ရန်\n"
-            "• `/join Link` - Private/Public Link များဖြင့် Auto Join ရန်\n"
-            "• `/search နာမည်` - Catalog Database ထဲတွင် ရုပ်ရှင်ပြန်ရှာရန်\n"
-            "• `/status` - Railway CPU, RAM နှင့် ယနေ့ Upload စာရင်းစစ်ရန်\n"
+            "• `/priority @username` - ဦးစားပေး Source ချန်နယ် သတ်မှတ်ရန်\n"
+            "• `/join Link` - Private/Public Link များဖြင့် Auto Join ရန်\n\n"
+            "📌 **BOT CONTROL & MONITORING:**\n"
+            "• `/search နာမည်` - Catalog Database ထဲတွင် ရုပ်ရှင် ပြန်ရှာရန်\n"
+            "• `/status` - Target, Sources, CPU, RAM နှင့် ယနေ့ Upload စာရင်းစစ်ရန်\n"
+            "• `/watermark စာသား` - ဗီဒီယိုအောက်တွင် ပါမည့် စာသား ပြောင်းရန်\n"
             "• `/backup` - JSON Database Backup ဖိုင်ထုတ်ယူရန်\n"
             "• `/clear` - Source List အားလုံးကို ရှင်းထုတ်ရန်\n"
             "• `/toggle` - Engine မောင်းနှင်မှုကို ခဏရပ်ရန်/ပြန်ဖွင့်ရန်"
         )
         await event.respond(menu_text)
+
+    # --- Set Target Channel Command ---
+    @bot.on(events.NewMessage(pattern=r'(?i)^/settarget (.+)', outgoing=True))
+    async def settarget_cmd(event):
+        raw_target = event.pattern_match.group(1).strip()
+        try:
+            if raw_target.startswith('-') or raw_target.lstrip('-').isdigit():
+                DB["target_channel"] = int(raw_target)
+            else:
+                entity = await bot.get_entity(raw_target)
+                DB["target_channel"] = entity.id
+            save_db()
+            await event.respond(f"🎯 **Target Channel အသစ် သတ်မှတ်ပြီးပါပြီ:** `{DB['target_channel']}`")
+        except Exception as e:
+            await event.respond(f"❌ Target Channel သတ်မှတ်ရာတွင် အဆင်မပြေပါ: `{e}`")
+
+    # --- Set Watermark Command ---
+    @bot.on(events.NewMessage(pattern=r'(?i)^/watermark (.+)', outgoing=True))
+    async def set_watermark_cmd(event):
+        wm_text = event.pattern_match.group(1).strip()
+        DB["watermark"] = wm_text
+        save_db()
+        await event.respond(f"📝 **Watermark စာသား ပြောင်းလဲပြီးပါပြီ:**\n{wm_text}")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^/join (.+)', outgoing=True))
     async def join_cmd(event):
@@ -217,11 +255,14 @@ async def main():
         cpu = psutil.cpu_percent()
         today = datetime.now().strftime("%Y-%m-%d")
         today_count = DB["daily_stats"].get(today, 0)
+        target_info = DB.get("target_channel", "မသတ်မှတ်ရသေးပါ")
 
         status_msg = (
             "📊 **ULTRA ENGINE HARDWARE MONITOR**\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             f"⚡ **Status:** `{DB.get('status', 'ON')}`\n"
+            f"🎯 **Target Channel:** `{target_info}`\n"
+            f"📡 **Active Sources:** `{len(DB.get('sources', []))} Channels`\n"
             f"⏱ **Bot Uptime:** `{uptime}`\n"
             f"🎛 **Railway CPU Usage:** `{cpu}%`\n"
             f"🧠 **Railway RAM Usage:** `{ram}%`\n"
