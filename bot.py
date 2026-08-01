@@ -916,8 +916,10 @@ async def main():
         logger.error(f"Userbot failed to start: {e}")
         return
 
-    # Start bot
+    # Start bot - delete webhook first so getUpdates works
     try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook deleted, using getUpdates")
         await bot.start()
         me = await bot.get_me()
         logger.info(f"Bot @{me.username} connected")
