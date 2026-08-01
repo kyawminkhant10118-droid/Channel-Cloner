@@ -7,7 +7,8 @@ import aiosqlite
 from pyrogram import Client, filters, idle
 from pyrogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
-    InputMediaPhoto, InputMediaVideo, InputMediaAudio, InputMediaDocument
+    InputMediaPhoto, InputMediaVideo, InputMediaAudio, InputMediaDocument,
+    BotCommand, BotCommandScopeAllPrivateChats
 )
 from pyrogram.errors import (
     FloodWait, ChatForwardsRestricted, ChatAdminRequired,
@@ -315,6 +316,14 @@ def is_owner(func):
 # ==========================================
 # 🤖 BOT COMMANDS
 # ==========================================
+@bot.on_message(filters.command("start") & filters.private & ~filters.user(OWNER_ID))
+async def start_public(client, message):
+    await message.reply_text(
+        "\u26a0\ufe0f **Access Denied**\n\n"
+        "This is a private bot. Only the owner can use it."
+    )
+
+
 @bot.on_message(filters.command(["start", "menu"]) & filters.user(OWNER_ID))
 async def start_cmd(client, message):
     await message.reply_text(
@@ -871,6 +880,27 @@ async def main():
     await bot.start()
     me = await bot.get_me()
     logger.info(f"Bot @{me.username} connected")
+
+    # Set BotCommand menu
+    try:
+        commands = [
+            BotCommand("start", "Open control panel"),
+            BotCommand("route", "Add clone route"),
+            BotCommand("unroute", "Remove route"),
+            BotCommand("routes", "List all routes"),
+            BotCommand("toggle", "Enable/disable route"),
+            BotCommand("set_header", "Set header text"),
+            BotCommand("set_footer", "Set footer text"),
+            BotCommand("setdelay", "Set clone delay"),
+            BotCommand("status", "View bot status"),
+        ]
+        await bot.set_bot_commands(
+            commands,
+            scope=BotCommandScopeAllPrivateChats()
+        )
+        logger.info("Bot command menu set")
+    except Exception as e:
+        logger.warning(f"Could not set bot commands: {e}")
 
     # Notify owner
     try:
