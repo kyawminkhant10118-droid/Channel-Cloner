@@ -19,7 +19,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Ultra Next-Level Engine v3.0 is Live & Running!"
+    return "Ultra Next-Level Engine v3.5 (Restricted Bypass Enabled) is Live!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -32,6 +32,7 @@ SESSION_STRING = os.environ.get("SESSION_STRING")
 
 # --- 3. Persistent JSON Database Setup ---
 DB_FILE = "ultimate_db.json"
+TEMP_DIR = "temp_downloads"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -96,7 +97,7 @@ def build_caption(original_text):
     
     return "\n\n".join(parts)
 
-# --- Anti-Flood Safe Upload Processor ---
+# --- Anti-Flood & Restricted Bypass Safe Upload Processor ---
 async def safe_upload(message, caption):
     target = DB.get("target_channel")
     if not target:
@@ -119,24 +120,51 @@ async def safe_upload(message, caption):
         print(f"[-] Skipped Duplicate File ID: {file_id}")
         return False
 
+    # Check if Message or Chat has Restricted Forwarding Enabled
+    is_noforward = getattr(message, 'noforward', False) or getattr(getattr(message, 'chat', None), 'noforward', False)
+
     while True:
         try:
-            sent_msg = await bot.send_file(target, message.media, caption=caption.strip())
+            sent_msg = None
             
-            if file_id:
-                DB["duplicates"].append(file_id)
+            # 1. Try Direct Upload Mode (Fastest)
+            if not is_noforward:
+                try:
+                    sent_msg = await bot.send_file(target, message.media, caption=caption.strip())
+                except Exception as direct_err:
+                    print(f"[!] Direct Send Failed, Switching to Bypass Download Mode: {direct_err}")
+                    is_noforward = True
 
-            title = message.text.split("\n")[0][:50] if message.text else "Unknown Movie"
-            clean_target = str(target).replace('-100', '')
-            msg_link = f"https://t.me/c/{clean_target}/{sent_msg.id}"
-            DB["catalog"][title.lower()] = {"title": title, "link": msg_link}
+            # 2. Forward Restricted Bypass Mode (Download & Re-upload)
+            if is_noforward or not sent_msg:
+                os.makedirs(TEMP_DIR, exist_ok=True)
+                print("[⏳] Downloading restricted content to local buffer...")
+                temp_path = await bot.download_media(message, file=TEMP_DIR)
+                
+                try:
+                    print("[🚀] Re-uploading bypass file to Target Channel...")
+                    sent_msg = await bot.send_file(target, temp_path, caption=caption.strip())
+                finally:
+                    # Clean up local file immediately to free space
+                    if temp_path and os.path.exists(temp_path):
+                        os.remove(temp_path)
+                        print("[🗑] Temporary local file cleaned.")
 
-            today = datetime.now().strftime("%Y-%m-%d")
-            DB["daily_stats"][today] = DB["daily_stats"].get(today, 0) + 1
+            if sent_msg:
+                if file_id:
+                    DB["duplicates"].append(file_id)
 
-            save_db()
-            print(f"[+] Successfully Uploaded: {title}")
-            return True
+                title = message.text.split("\n")[0][:50] if message.text else "Unknown Movie"
+                clean_target = str(target).replace('-100', '')
+                msg_link = f"https://t.me/c/{clean_target}/{sent_msg.id}"
+                DB["catalog"][title.lower()] = {"title": title, "link": msg_link}
+
+                today = datetime.now().strftime("%Y-%m-%d")
+                DB["daily_stats"][today] = DB["daily_stats"].get(today, 0) + 1
+
+                save_db()
+                print(f"[+] Successfully Uploaded: {title}")
+                return True
 
         except errors.FloodWaitError as e:
             print(f"[!] [Anti-Flood] Limit reached. Waiting for {e.seconds} seconds...")
@@ -164,18 +192,15 @@ async def clone_old_videos(source_chat):
 async def resolve_and_join(link_or_username):
     target_str = link_or_username.strip()
     
-    # Extract username from URL if public link
     if "t.me/" in target_str and not ("+" in target_str or "joinchat" in target_str):
         target_str = "@" + target_str.split("t.me/")[-1].replace('/', '')
 
-    # Private invite link joining logic
     if "+" in target_str or "joinchat" in target_str:
         hash_code = target_str.split('/')[-1].replace('+', '')
         chat = await bot(functions.messages.ImportChatInviteRequest(hash_code))
         entity = chat.chats[0]
         return entity.id, f"Private Channel ({entity.title})"
 
-    # Username or Channel ID logic
     try:
         entity = await bot.get_entity(target_str)
         try:
@@ -191,7 +216,7 @@ async def resolve_and_join(link_or_username):
 async def main():
     await bot.start()
     print("==================================================")
-    print("🚀 ULTRA DYNAMIC ENGINE v3.0 IS ONLINE & READY!")
+    print("🚀 ULTRA ENGINE v3.5 (RESTRICTED BYPASS) IS LIVE!")
     print("==================================================")
     
     asyncio.create_task(session_refresher())
@@ -201,18 +226,16 @@ async def main():
     async def start_cmd(event):
         target_info = DB.get("target_channel", "မသတ်မှတ်ရသေးပါ")
         menu_text = (
-            "👑 **ULTRA NEXT-LEVEL USERBOT ENGINE v3.0** 👑\n"
+            "👑 **ULTRA NEXT-LEVEL USERBOT ENGINE v3.5** 👑\n"
+            "*(Restricted Channel Auto-Bypass Enabled)*\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **Target Channel:** `{target_info}`\n"
             f"🎞 **Media Filter:** `{DB.get('media_filter', 'all').upper()}`\n"
             f"📡 **Active Sources:** `{len(DB.get('sources', []))}` Channels\n\n"
             
             "📥 **1. SOURCE & LINK COMMANDS:**\n"
-            "• `/add <Link သို့မဟုတ် Username>` - Source ထည့်ရန် (Auto Join & Clone)\n"
-            "  └ *ဥပမာ:* `/add https://t.me/channel_name`\n"
-            "  └ *ဥပမာ:* `/add https://t.me/+AbCdEf12345`\n"
-            "  └ *ဥပမာ:* `/add @channel_username`\n"
-            "• `/del <Link သို့မဟုတ် Username>` - Source စာရင်းမှ ပြန်ထုတ်ရန်\n"
+            "• `/add <Link/Username>` - Private/Public Source ထည့်ရန် (Auto Bypass & Clone)\n"
+            "• `/del <Link/Username>` - Source စာရင်းမှ ပြန်ထုတ်ရန်\n"
             "• `/sources` - ထည့်ထားသော Source ချန်နယ်များ စာရင်းကြည့်ရန်\n"
             "• `/join <Link>` - Channel / Group သို့ Auto Join ရန်\n\n"
 
@@ -232,7 +255,7 @@ async def main():
         )
         await event.respond(menu_text)
 
-    # --- Smart Add Command (Link / Username / Private Link) ---
+    # --- Smart Add Command ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/add (.+)', outgoing=True))
     async def add_cmd(event):
         raw_input = event.pattern_match.group(1).strip()
@@ -250,7 +273,7 @@ async def main():
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📌 **Title:** `{title}`\n"
                     f"🆔 **Source:** `{src_key}`\n\n"
-                    f"🔄 *ကားအဟောင်းများကို Auto Clone လုပ်ပေးနေပါပြီ...*"
+                    f"🔄 * Restricted ကားများပါ အလိုအလျောက် Bypass လုပ်၍ ဆွဲတင်ပေးနေပါပြီ...*"
                 )
                 asyncio.create_task(clone_old_videos(src_key))
             else:
@@ -363,7 +386,7 @@ async def main():
         today_count = DB["daily_stats"].get(today, 0)
 
         status_msg = (
-            "📊 **ULTRA ENGINE HARDWARE MONITOR v3.0**\n"
+            "📊 **ULTRA ENGINE HARDWARE MONITOR v3.5**\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             f"⚡ **Status:** `{DB.get('status', 'ON')}`\n"
             f"🎯 **Target Channel:** `{DB.get('target_channel')}`\n"
