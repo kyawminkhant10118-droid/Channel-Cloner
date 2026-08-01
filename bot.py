@@ -323,8 +323,18 @@ def is_owner(func):
 # ==========================================
 # 🤖 BOT COMMANDS
 # ==========================================
-@bot.on_message(filters.command(["start", "menu"]) & filters.user(OWNER_ID))
+@bot.on_message(filters.command(["start", "menu"]) & filters.private)
 async def start_cmd(client, message):
+    user_id = message.from_user.id if message.from_user else 0
+    logger.info(f"/start from user_id={user_id}, OWNER_ID={OWNER_ID}, match={user_id == OWNER_ID}")
+    
+    if user_id != OWNER_ID:
+        await message.reply_text(
+            "\u26a0\ufe0f **Access Denied**\n\n"
+            "This is a private bot."
+        )
+        return
+    
     try:
         await message.reply_text(
             await get_status_text(),
@@ -336,17 +346,6 @@ async def start_cmd(client, message):
             await message.reply_text(f"Error: {e}")
         except Exception:
             pass
-
-
-@bot.on_message(filters.command("start") & filters.private)
-async def start_public(client, message):
-    """Catch-all /start for non-owners"""
-    if message.from_user and message.from_user.id == OWNER_ID:
-        return  # Owner handler already ran
-    await message.reply_text(
-        "\u26a0\ufe0f **Access Denied**\n\n"
-        "This is a private bot."
-    )
 
 
 @bot.on_message(filters.command("route") & filters.user(OWNER_ID))
@@ -442,6 +441,22 @@ async def routes_cmd(client, message):
         "`/unroute <src_id> <dst_id>` - delete"
     )
     await message.reply(text)
+
+
+@bot.on_message(filters.command("debug") & filters.private)
+async def debug_cmd(client, message):
+    """Debug command - shows user info"""
+    user_id = message.from_user.id if message.from_user else 0
+    text = (
+        f"**Debug Info**\n\n"
+        f"Your ID: `{user_id}`\n"
+        f"OWNER_ID: `{OWNER_ID}`\n"
+        f"Match: `{user_id == OWNER_ID}`\n"
+        f"API_ID: `{API_ID}`\n"
+        f"Bot Token: `{BOT_TOKEN[:10]}...`\n"
+        f"Session: `{SESSION_STRING[:10]}...`"
+    )
+    await message.reply_text(text)
 
 
 @bot.on_message(filters.command("toggle") & filters.user(OWNER_ID))
