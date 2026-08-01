@@ -1,3 +1,5 @@
-telethon
+Telethon
+cryptg
+h2
 Flask
 psutil
