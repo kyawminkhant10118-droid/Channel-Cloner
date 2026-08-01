@@ -11,7 +11,7 @@ from threading import Thread
 from flask import Flask
 
 # --- Telegram Native Client & Safe Imports ---
-from telethon import TelegramClient, events, errors, functions
+from telethon import TelegramClient, events, errors, functions, types
 from telethon.sessions import StringSession
 
 # --- 1. Web Server (Railway Keep-Alive Server) ---
@@ -19,7 +19,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Ultra Next-Level Engine v3.5 (Restricted Bypass Enabled) is Live!"
+    return "Ultra Next-Level Engine v4.0 (High-Speed & Detailed Status) is Live!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -69,6 +69,29 @@ start_time = time.time()
 # --- 4. Userbot Client Initialization ---
 bot = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
+# --- Telegram Official Bot Command Menu Registration ---
+async def setup_bot_command_menu():
+    try:
+        commands = [
+            types.BotCommand(command="start", description="📖 Main Command Menu"),
+            types.BotCommand(command="add", description="📥 Add Source (Link/Username)"),
+            types.BotCommand(command="sources", description="📡 List Active Sources"),
+            types.BotCommand(command="status", description="📊 Hardware & Engine Diagnostics"),
+            types.BotCommand(command="filter", description="🎞 Set Filter (all/video/document)"),
+            types.BotCommand(command="settarget", description="🎯 Set Target Channel ID"),
+            types.BotCommand(command="search", description="🔍 Search Cataloged Movies"),
+            types.BotCommand(command="toggle", description="⚙️ Pause / Resume Engine"),
+            types.BotCommand(command="backup", description="📦 Download Database Backup")
+        ]
+        await bot(functions.bots.SetBotCommandsRequest(
+            scope=types.BotCommandScopeDefault(),
+            lang_code='en',
+            commands=commands
+        ))
+        print("[+] Official Telegram Bot Command Menu Registered Successfully!")
+    except Exception as e:
+        print(f"[!] Command Menu Registration skipped: {e}")
+
 # --- Session Refresher Service ---
 async def session_refresher():
     while True:
@@ -97,7 +120,7 @@ def build_caption(original_text):
     
     return "\n\n".join(parts)
 
-# --- Anti-Flood & Restricted Bypass Safe Upload Processor ---
+# --- Anti-Flood & High-Speed Restricted Bypass Upload Processor ---
 async def safe_upload(message, caption):
     target = DB.get("target_channel")
     if not target:
@@ -120,35 +143,40 @@ async def safe_upload(message, caption):
         print(f"[-] Skipped Duplicate File ID: {file_id}")
         return False
 
-    # Check if Message or Chat has Restricted Forwarding Enabled
     is_noforward = getattr(message, 'noforward', False) or getattr(getattr(message, 'chat', None), 'noforward', False)
 
     while True:
         try:
             sent_msg = None
             
-            # 1. Try Direct Upload Mode (Fastest)
+            # 1. Direct Forward Send (If not restricted)
             if not is_noforward:
                 try:
                     sent_msg = await bot.send_file(target, message.media, caption=caption.strip())
                 except Exception as direct_err:
-                    print(f"[!] Direct Send Failed, Switching to Bypass Download Mode: {direct_err}")
+                    print(f"[!] Direct Send Blocked, Switching to Fast Download Mode...")
                     is_noforward = True
 
-            # 2. Forward Restricted Bypass Mode (Download & Re-upload)
+            # 2. High-Speed Restricted Bypass Mode (Optimized 512KB Chunking)
             if is_noforward or not sent_msg:
                 os.makedirs(TEMP_DIR, exist_ok=True)
-                print("[⏳] Downloading restricted content to local buffer...")
+                print("[🚀] High-Speed Downloading restricted video to local buffer...")
+                
                 temp_path = await bot.download_media(message, file=TEMP_DIR)
                 
                 try:
-                    print("[🚀] Re-uploading bypass file to Target Channel...")
-                    sent_msg = await bot.send_file(target, temp_path, caption=caption.strip())
+                    print("[⚡] High-Speed Re-uploading to Target Channel...")
+                    sent_msg = await bot.send_file(
+                        target, 
+                        temp_path, 
+                        caption=caption.strip(),
+                        part_size_kb=512  # Maximum transfer chunk size for fastest speed
+                    )
                 finally:
-                    # Clean up local file immediately to free space
+                    # Clean up local temp file immediately
                     if temp_path and os.path.exists(temp_path):
                         os.remove(temp_path)
-                        print("[🗑] Temporary local file cleaned.")
+                        print("[🗑] Temp file cleaned.")
 
             if sent_msg:
                 if file_id:
@@ -216,9 +244,11 @@ async def resolve_and_join(link_or_username):
 async def main():
     await bot.start()
     print("==================================================")
-    print("🚀 ULTRA ENGINE v3.5 (RESTRICTED BYPASS) IS LIVE!")
+    print("🚀 ULTRA ENGINE v4.0 (HIGH-SPEED & STATUS) IS LIVE!")
     print("==================================================")
     
+    # Auto Set Command Menu & Session Ping
+    await setup_bot_command_menu()
     asyncio.create_task(session_refresher())
 
     # --- Start & Main Help Menu Command ---
@@ -226,15 +256,15 @@ async def main():
     async def start_cmd(event):
         target_info = DB.get("target_channel", "မသတ်မှတ်ရသေးပါ")
         menu_text = (
-            "👑 **ULTRA NEXT-LEVEL USERBOT ENGINE v3.5** 👑\n"
-            "*(Restricted Channel Auto-Bypass Enabled)*\n"
+            "👑 **ULTRA NEXT-LEVEL USERBOT ENGINE v4.0** 👑\n"
+            "*(High-Speed Restricted Bypass & Detailed Diagnostics)*\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **Target Channel:** `{target_info}`\n"
             f"🎞 **Media Filter:** `{DB.get('media_filter', 'all').upper()}`\n"
             f"📡 **Active Sources:** `{len(DB.get('sources', []))}` Channels\n\n"
             
             "📥 **1. SOURCE & LINK COMMANDS:**\n"
-            "• `/add <Link/Username>` - Private/Public Source ထည့်ရန် (Auto Bypass & Clone)\n"
+            "• `/add <Link/Username>` - Source ထည့်ရန် (Auto Join & Fast Clone)\n"
             "• `/del <Link/Username>` - Source စာရင်းမှ ပြန်ထုတ်ရန်\n"
             "• `/sources` - ထည့်ထားသော Source ချန်နယ်များ စာရင်းကြည့်ရန်\n"
             "• `/join <Link>` - Channel / Group သို့ Auto Join ရန်\n\n"
@@ -248,12 +278,74 @@ async def main():
 
             "📊 **3. CONTROL & MONITORING:**\n"
             "• `/search <နာမည်>` - Database ထဲ ရုပ်ရှင်ပြန်ရှာရန်\n"
-            "• `/status` - CPU, RAM နှင့် Upload စာရင်း အသေးစိတ်ကြည့်ရန်\n"
+            "• `/status` - Hardware & Server အသေးစိတ် စစ်ဆေးရန်\n"
             "• `/backup` - DB ဖိုင် ထုတ်ယူရန်\n"
             "• `/toggle` - Bot မောင်းနှင်မှု ခဏရပ်/ပြန်ဖွင့်ရန်\n"
             "• `/clear` - Source စာရင်း အကုန် ရှင်းထုတ်ရန်"
         )
         await event.respond(menu_text)
+
+    # --- Ultra Detailed Status Dashboard Command ---
+    @bot.on(events.NewMessage(pattern=r'(?i)^/status$', outgoing=True))
+    async def status_cmd(event):
+        # Time calculations
+        uptime_sec = int(time.time() - start_time)
+        hours, remainder = divmod(uptime_sec, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        uptime_str = f"{hours}h {minutes}m {seconds}s"
+
+        # Hardware metrics
+        vram = psutil.virtual_memory()
+        ram_used_mb = round(vram.used / (1024 * 1024), 2)
+        ram_total_mb = round(vram.total / (1024 * 1024), 2)
+        ram_pct = vram.percent
+
+        cpu_pct = psutil.cpu_percent(interval=0.5)
+
+        disk = psutil.disk_usage('.')
+        disk_free_gb = round(disk.free / (1024 * 1024 * 1024), 2)
+        disk_total_gb = round(disk.total / (1024 * 1024 * 1024), 2)
+
+        # Temp Storage Check
+        temp_size_mb = 0
+        if os.path.exists(TEMP_DIR):
+            for f in os.listdir(TEMP_DIR):
+                fp = os.path.join(TEMP_DIR, f)
+                if os.path.isfile(fp):
+                    temp_size_mb += os.path.getsize(fp)
+        temp_size_mb = round(temp_size_mb / (1024 * 1024), 2)
+
+        # DB Statistics
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_count = DB["daily_stats"].get(today, 0)
+        total_catalog = len(DB.get("catalog", {}))
+        total_duplicates = len(DB.get("duplicates", []))
+        total_sources = len(DB.get("sources", []))
+
+        status_msg = (
+            "📊 **ULTRA ENGINE HARDWARE & DIAGNOSTICS v4.0**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "⚡ **ENGINE STATUS & CONFIG:**\n"
+            f"• **System State:** `{DB.get('status', 'ON')}`\n"
+            f"• **Target Channel:** `{DB.get('target_channel', 'Not Set')}`\n"
+            f"• **Media Mode:** `{DB.get('media_filter', 'all').upper()}`\n"
+            f"• **Ad-Cleaner:** `{'ENABLED' if DB.get('clean_ads') else 'DISABLED'}`\n"
+            f"• **Active Sources:** `{total_sources} Channels`\n\n"
+
+            "🖥 **RAILWAY HARDWARE MONITOR:**\n"
+            f"• **CPU Utilization:** `{cpu_pct}%`\n"
+            f"• **RAM Usage:** `{ram_used_mb} MB / {ram_total_mb} MB ({ram_pct}%)`\n"
+            f"• **Disk Storage Free:** `{disk_free_gb} GB / {disk_total_gb} GB`\n"
+            f"• **Temp File Buffer:** `{temp_size_mb} MB`\n"
+            f"• **Engine Uptime:** `{uptime_str}`\n\n"
+
+            "📈 **DATABASE & UPLOAD STATISTICS:**\n"
+            f"• **Today Uploads ({today}):** `{today_count} Movies`\n"
+            f"• **Total Cataloged Movies:** `{total_catalog} Files`\n"
+            f"• **Duplicates Blocked:** `{total_duplicates} Files`\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        await event.respond(status_msg)
 
     # --- Smart Add Command ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/add (.+)', outgoing=True))
@@ -273,7 +365,7 @@ async def main():
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📌 **Title:** `{title}`\n"
                     f"🆔 **Source:** `{src_key}`\n\n"
-                    f"🔄 * Restricted ကားများပါ အလိုအလျောက် Bypass လုပ်၍ ဆွဲတင်ပေးနေပါပြီ...*"
+                    f"⚡ *Restricted ဖိုင်များပါ High-Speed ဖြင့် အလိုအလျောက် Clone လုပ်ပေးနေပါပြီ...*"
                 )
                 asyncio.create_task(clone_old_videos(src_key))
             else:
@@ -376,30 +468,6 @@ async def main():
         for res in results[:15]:
             msg += f"🎬 [{res['title']}]({res['link']})\n"
         await event.respond(msg, link_preview=False)
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^/status$', outgoing=True))
-    async def status_cmd(event):
-        uptime = f"{int(time.time() - start_time) // 3600}h {int(time.time() - start_time) % 3600 // 60}m"
-        ram = psutil.virtual_memory().percent
-        cpu = psutil.cpu_percent()
-        today = datetime.now().strftime("%Y-%m-%d")
-        today_count = DB["daily_stats"].get(today, 0)
-
-        status_msg = (
-            "📊 **ULTRA ENGINE HARDWARE MONITOR v3.5**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ **Status:** `{DB.get('status', 'ON')}`\n"
-            f"🎯 **Target Channel:** `{DB.get('target_channel')}`\n"
-            f"🎞 **Media Filter:** `{DB.get('media_filter', 'all').upper()}`\n"
-            f"📡 **Active Sources:** `{len(DB.get('sources', []))} Channels`\n"
-            f"⏱ **Bot Uptime:** `{uptime}`\n"
-            f"🎛 **Railway CPU:** `{cpu}%`\n"
-            f"🧠 **Railway RAM:** `{ram}%`\n"
-            f"📅 **Today Uploads:** `{today_count} Movies`\n"
-            f"📦 **Cataloged Total:** `{len(DB['catalog'])} Movies`\n"
-            f"🚫 **Duplicates Blocked:** `{len(DB['duplicates'])} Files`"
-        )
-        await event.respond(status_msg)
 
     @bot.on(events.NewMessage(pattern=r'(?i)^/backup$', outgoing=True))
     async def backup_cmd(event):
