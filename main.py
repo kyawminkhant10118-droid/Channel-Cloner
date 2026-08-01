@@ -3,6 +3,7 @@ import re
 import sys
 import json
 import time
+import logging
 import psutil
 import asyncio
 import subprocess
@@ -10,20 +11,23 @@ from datetime import datetime
 from threading import Thread
 from flask import Flask
 
-# --- Telegram Native Client & Safe Imports ---
-from telethon import TelegramClient, events, errors, functions, types
-from telethon.sessions import StringSession
+# Suppress Werkzeug logs for cleaner Railway terminal output
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # --- 1. Web Server (Railway Keep-Alive Server) ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Ultra Pro Engine v5.3 (All Commands Registered) is Live!"
+    return "Ultra Pro Engine v6.0 (Production Grade) is Live!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+# --- Telegram Native Client & Safe Imports ---
+from telethon import TelegramClient, events, errors, functions, types
+from telethon.sessions import StringSession
 
 # --- 2. Telegram API Credentials ---
 API_ID = 38078790
@@ -100,9 +104,14 @@ def generate_auto_screenshot(video_path):
         print(f"[-] FFmpeg Screenshot Error: {e}")
     return None
 
-# --- Complete Telegram Command Menu Registration (ALL 18 COMMANDS) ---
+# --- Smart Safe Telegram Command Menu Resolver ---
 async def setup_bot_command_menu():
     try:
+        # Check if current session is a Bot API account
+        if not await bot.is_bot():
+            print("[] Userbot Mode Detected: Skipping Telegram Bot API Menu setup (Userbot mode Active).")
+            return
+
         commands = [
             types.BotCommand(command="start", description=" Main Help Menu"),
             types.BotCommand(command="status", description=" Engine Hardware & Diagnostics"),
@@ -128,9 +137,9 @@ async def setup_bot_command_menu():
             lang_code='en',
             commands=commands
         ))
-        print("[+] Official Telegram Command Menu (18 Commands) Registered Successfully!")
+        print("[+] Official Telegram Command Menu Registered Successfully!")
     except Exception as e:
-        print(f"[!] Command Menu Error: {e}")
+        print(f"[!] Command Menu Info: Handled safely ({e})")
 
 # --- Session Refresher Service ---
 async def session_refresher():
@@ -145,7 +154,6 @@ async def session_refresher():
 def build_caption(original_text):
     caption = original_text or ""
     
-    # Custom Link Replacement
     rep_link = DB.get("replace_link")
     if rep_link:
         caption = re.sub(r'https?://t\.me/\S+', rep_link, caption)
@@ -196,7 +204,7 @@ async def safe_upload(message, caption):
         try:
             sent_msg = None
             
-            # 1. Direct Forward Try
+            # Direct Forward Attempt
             if not is_noforward and not thumb_to_use:
                 try:
                     sent_msg = await bot.send_file(target, message.media, caption=caption.strip())
@@ -204,7 +212,7 @@ async def safe_upload(message, caption):
                     print("[!] Direct Send Blocked, Switching to Fast Download Mode...")
                     is_noforward = True
 
-            # 2. Fast Restricted / Auto Screenshot Buffer Mode
+            # Fast Restricted / Auto Screenshot Buffer Mode
             if is_noforward or thumb_to_use or not sent_msg:
                 os.makedirs(TEMP_DIR, exist_ok=True)
                 print("[] Downloading video buffer (High-Speed)...")
@@ -302,7 +310,7 @@ async def resolve_and_join(link_or_username):
 async def main():
     await bot.start()
     print("==================================================")
-    print(" ULTRA PRO ENGINE v5.3 (ALL MENU COMMANDS) IS LIVE!")
+    print(" ULTRA PRO ENGINE v6.0 (PRODUCTION GRADE) IS LIVE!")
     print("==================================================")
     
     await setup_bot_command_menu()
@@ -313,8 +321,8 @@ async def main():
     async def start_cmd(event):
         target_info = DB.get("target_channel", "မသတ်မှတ်ရသေးပါ")
         menu_text = (
-            " **ULTRA PRO USERBOT ENGINE v5.3** \n"
-            "*(Full Menu Integration & Streaming Bypass)*\n"
+            " **ULTRA PRO USERBOT ENGINE v6.0** \n"
+            "*(Production Grade & Smart Bypass)*\n"
             "\n"
             f" **Target Channel:** `{target_info}`\n"
             f" **Log Channel:** `{DB.get('log_channel', 'Not Set')}`\n"
@@ -362,7 +370,7 @@ async def main():
         today_count = DB["daily_stats"].get(today, 0)
 
         status_msg = (
-            " **ULTRA ENGINE HARDWARE & DIAGNOSTICS v5.3**\n"
+            " **ULTRA ENGINE HARDWARE & DIAGNOSTICS v6.0**\n"
             "\n"
             f" **Status:** `{DB.get('status', 'ON')}` | **Sources:** `{len(DB.get('sources', []))}`\n"
             f" **CPU Utilization:** `{cpu_pct}%`\n"
