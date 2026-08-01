@@ -322,6 +322,13 @@ def is_owner(func):
 # ==========================================
 # 🤖 BOT COMMANDS
 # ==========================================
+
+# DEBUG: catch ALL messages to verify bot receives updates
+@bot.on_message()
+async def catch_all(client, message):
+    logger.info(f"[CATCH-ALL] msg_id={message.id} chat={message.chat.id} user={message.from_user.id if message.from_user else 'None'} text={message.text[:50] if message.text else 'no_text'}")
+
+
 @bot.on_message(filters.command(["start", "menu"]) & filters.private)
 async def start_cmd(client, message):
     user_id = message.from_user.id if message.from_user else 0
@@ -918,7 +925,7 @@ async def main():
 
     # Start bot - delete webhook first so getUpdates works
     try:
-        await bot.delete_webhook(drop_pending_updates=True)
+        await bot.delete_webhook(drop_pending_updates=False)
         logger.info("Webhook deleted, using getUpdates")
         await bot.start()
         me = await bot.get_me()
