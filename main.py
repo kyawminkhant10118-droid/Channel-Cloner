@@ -19,7 +19,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Next-Level Ultimate Dynamic Engine is Live!"
+    return "Ultra Next-Level Engine v3.0 is Live & Running!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -41,13 +41,16 @@ def load_db():
         except Exception as e:
             print(f"[-] DB Read Error: {e}")
     return {
-        "target_channel": -1003351682369,  # Default Target Channel
+        "target_channel": -1003351682369,
         "sources": [],
         "priority_sources": [],
         "duplicates": [],
         "catalog": {},
         "daily_stats": {},
+        "header": "",
         "watermark": "📥 **Uploaded by Our Channel**",
+        "footer": "",
+        "media_filter": "all",  # 'all', 'video', 'document'
         "clean_ads": True,
         "status": "ON"
     }
@@ -71,9 +74,27 @@ async def session_refresher():
         try:
             await bot.get_me()
             print("[+] Session Keep-Alive Ping Sent.")
-        except Exception as e:
-            print(f"[-] Session Ping Exception: {e}")
+        except Exception:
+            pass
         await asyncio.sleep(1800)
+
+# --- Format Caption Helper ---
+def build_caption(original_text):
+    caption = original_text or ""
+    if DB.get("clean_ads", True):
+        caption = re.sub(r'http\S+', '', caption)
+        caption = re.sub(r'@\S+', '', caption)
+        caption = re.sub(r'(?i)(join|sub|channel|promo|1xbet|sponsor)', '', caption)
+    
+    caption = caption.strip()
+    
+    parts = []
+    if DB.get("header"): parts.append(DB["header"].strip())
+    if caption: parts.append(f"**{caption}**")
+    if DB.get("watermark"): parts.append(DB["watermark"].strip())
+    if DB.get("footer"): parts.append(DB["footer"].strip())
+    
+    return "\n\n".join(parts)
 
 # --- Anti-Flood Safe Upload Processor ---
 async def safe_upload(message, caption):
@@ -82,10 +103,15 @@ async def safe_upload(message, caption):
         print("[-] Target Channel စာရင်း မရှိသေးပါ။ /settarget ဖြင့် အရင် သတ်မှတ်ပေးပါ။")
         return False
 
+    # Media Filter Check
+    media_mode = DB.get("media_filter", "all")
+    if media_mode == "video" and not message.video:
+        return False
+    elif media_mode == "document" and not (message.document and not message.video):
+        return False
+
     file_id = None
-    if message.video:
-        file_id = str(message.media.document.id)
-    elif message.document:
+    if message.video or message.document:
         file_id = str(message.media.document.id)
 
     # Duplicate Prevention Check
@@ -101,8 +127,6 @@ async def safe_upload(message, caption):
                 DB["duplicates"].append(file_id)
 
             title = message.text.split("\n")[0][:50] if message.text else "Unknown Movie"
-            
-            # Channel Link Format
             clean_target = str(target).replace('-100', '')
             msg_link = f"https://t.me/c/{clean_target}/{sent_msg.id}"
             DB["catalog"][title.lower()] = {"title": title, "link": msg_link}
@@ -130,50 +154,167 @@ async def clone_old_videos(source_chat):
                 print("[-] Bot Engine is Paused. Crawler Stopping.")
                 break
             if message.video or message.document:
-                caption = message.text or ""
-                if DB.get("clean_ads", True):
-                    caption = re.sub(r'http\S+', '', caption)
-                    caption = re.sub(r'@\S+', '', caption)
-                    caption = re.sub(r'(?i)(join|sub|channel|promo|1xbet|sponsor)', '', caption)
-                if DB.get("watermark"):
-                    caption = f"**{caption.strip()}**\n\n{DB['watermark']}" if caption.strip() else DB["watermark"]
-
+                caption = build_caption(message.text)
                 await safe_upload(message, caption)
                 await asyncio.sleep(2.0)
     except Exception as crawler_err:
         print(f"[-] Crawler Execution Error on {source_chat}: {crawler_err}")
 
+# --- Link & Username Smart Resolver Helper ---
+async def resolve_and_join(link_or_username):
+    target_str = link_or_username.strip()
+    
+    # Extract username from URL if public link
+    if "t.me/" in target_str and not ("+" in target_str or "joinchat" in target_str):
+        target_str = "@" + target_str.split("t.me/")[-1].replace('/', '')
+
+    # Private invite link joining logic
+    if "+" in target_str or "joinchat" in target_str:
+        hash_code = target_str.split('/')[-1].replace('+', '')
+        chat = await bot(functions.messages.ImportChatInviteRequest(hash_code))
+        entity = chat.chats[0]
+        return entity.id, f"Private Channel ({entity.title})"
+
+    # Username or Channel ID logic
+    try:
+        entity = await bot.get_entity(target_str)
+        try:
+            await bot(functions.channels.JoinChannelRequest(entity))
+        except: pass
+        
+        identifier = f"@{entity.username}" if entity.username else str(entity.id)
+        return identifier, entity.title
+    except Exception as e:
+        raise Exception(f"Link / Username ကို ဖတ်၍ မရပါ: {e}")
+
 # --- Main Engine Core Execution ---
 async def main():
     await bot.start()
     print("==================================================")
-    print("🚀 ULTRA DYNAMIC ENGINE USERBOT IS ONLINE & READY!")
+    print("🚀 ULTRA DYNAMIC ENGINE v3.0 IS ONLINE & READY!")
     print("==================================================")
     
     asyncio.create_task(session_refresher())
 
-    # --- Start & Help Menu Command ---
+    # --- Start & Main Help Menu Command ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/start$', outgoing=True))
     async def start_cmd(event):
         target_info = DB.get("target_channel", "မသတ်မှတ်ရသေးပါ")
         menu_text = (
-            "👑 **ULTRA NEXT-LEVEL USERBOT ENGINE** 👑\n"
+            "👑 **ULTRA NEXT-LEVEL USERBOT ENGINE v3.0** 👑\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 **လက်ရှိ Target Channel:** `{target_info}`\n\n"
-            "📌 **TARGET & SOURCES MANAGEMENT:**\n"
-            "• `/settarget ID/Username` - ရုပ်ရှင်များ တင်မည့် Target Channel ပြောင်းရန်\n"
-            "• `/add @username` - Source ချန်နယ်အသစ်ထည့်၍ ကားဟောင်းများ Auto တင်ရန်\n"
-            "• `/priority @username` - ဦးစားပေး Source ချန်နယ် သတ်မှတ်ရန်\n"
-            "• `/join Link` - Private/Public Link များဖြင့် Auto Join ရန်\n\n"
-            "📌 **BOT CONTROL & MONITORING:**\n"
-            "• `/search နာမည်` - Catalog Database ထဲတွင် ရုပ်ရှင် ပြန်ရှာရန်\n"
-            "• `/status` - Target, Sources, CPU, RAM နှင့် ယနေ့ Upload စာရင်းစစ်ရန်\n"
-            "• `/watermark စာသား` - ဗီဒီယိုအောက်တွင် ပါမည့် စာသား ပြောင်းရန်\n"
-            "• `/backup` - JSON Database Backup ဖိုင်ထုတ်ယူရန်\n"
-            "• `/clear` - Source List အားလုံးကို ရှင်းထုတ်ရန်\n"
-            "• `/toggle` - Engine မောင်းနှင်မှုကို ခဏရပ်ရန်/ပြန်ဖွင့်ရန်"
+            f"🎯 **Target Channel:** `{target_info}`\n"
+            f"🎞 **Media Filter:** `{DB.get('media_filter', 'all').upper()}`\n"
+            f"📡 **Active Sources:** `{len(DB.get('sources', []))}` Channels\n\n"
+            
+            "📥 **1. SOURCE & LINK COMMANDS:**\n"
+            "• `/add <Link သို့မဟုတ် Username>` - Source ထည့်ရန် (Auto Join & Clone)\n"
+            "  └ *ဥပမာ:* `/add https://t.me/channel_name`\n"
+            "  └ *ဥပမာ:* `/add https://t.me/+AbCdEf12345`\n"
+            "  └ *ဥပမာ:* `/add @channel_username`\n"
+            "• `/del <Link သို့မဟုတ် Username>` - Source စာရင်းမှ ပြန်ထုတ်ရန်\n"
+            "• `/sources` - ထည့်ထားသော Source ချန်နယ်များ စာရင်းကြည့်ရန်\n"
+            "• `/join <Link>` - Channel / Group သို့ Auto Join ရန်\n\n"
+
+            "⚙️ **2. CAPTION & FORMATTING:**\n"
+            "• `/settarget <ID/Username>` - Target Channel ပြောင်းရန်\n"
+            "• `/watermark <စာသား>` - ဗီဒီယို စာသား ပြောင်းရန်\n"
+            "• `/header <စာသား>` - ဗီဒီယို ထိပ်ဆုံး စာသား သတ်မှတ်ရန်\n"
+            "• `/footer <စာသား>` - ဗီဒီယို အောက်ဆုံး စာသား သတ်မှတ်ရန်\n"
+            "• `/filter <all|video|document>` - တင်မည့် ဖိုင်အမျိုးအစား သတ်မှတ်ရန်\n\n"
+
+            "📊 **3. CONTROL & MONITORING:**\n"
+            "• `/search <နာမည်>` - Database ထဲ ရုပ်ရှင်ပြန်ရှာရန်\n"
+            "• `/status` - CPU, RAM နှင့် Upload စာရင်း အသေးစိတ်ကြည့်ရန်\n"
+            "• `/backup` - DB ဖိုင် ထုတ်ယူရန်\n"
+            "• `/toggle` - Bot မောင်းနှင်မှု ခဏရပ်/ပြန်ဖွင့်ရန်\n"
+            "• `/clear` - Source စာရင်း အကုန် ရှင်းထုတ်ရန်"
         )
         await event.respond(menu_text)
+
+    # --- Smart Add Command (Link / Username / Private Link) ---
+    @bot.on(events.NewMessage(pattern=r'(?i)^/add (.+)', outgoing=True))
+    async def add_cmd(event):
+        raw_input = event.pattern_match.group(1).strip()
+        await event.respond(f"⏳ **Link အား စစ်ဆေး၍ Join နေပါသည်...**\n`{raw_input}`")
+        
+        try:
+            identifier, title = await resolve_and_join(raw_input)
+            src_key = str(identifier)
+            
+            if src_key not in DB["sources"]:
+                DB["sources"].append(src_key)
+                save_db()
+                await event.respond(
+                    f"✅ **Source ထည့်သွင်းခြင်း အောင်မြင်ပါသည်!**\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📌 **Title:** `{title}`\n"
+                    f"🆔 **Source:** `{src_key}`\n\n"
+                    f"🔄 *ကားအဟောင်းများကို Auto Clone လုပ်ပေးနေပါပြီ...*"
+                )
+                asyncio.create_task(clone_old_videos(src_key))
+            else:
+                await event.respond("⚠️ ဤ Source သည် စာရင်းထဲတွင် ရှိပြီးသား ဖြစ်ပါသည်။")
+        except Exception as e:
+            await event.respond(f"❌ Source ထည့်၍ မရပါ: `{e}`")
+
+    # --- Delete Source Command ---
+    @bot.on(events.NewMessage(pattern=r'(?i)^/del (.+)', outgoing=True))
+    async def del_cmd(event):
+        raw_input = event.pattern_match.group(1).strip()
+        found = False
+        for src in list(DB["sources"]):
+            if raw_input in src or src in raw_input:
+                DB["sources"].remove(src)
+                found = True
+        
+        if found:
+            save_db()
+            await event.respond(f"🗑 **Source ကို စာရင်းမှ ဖျက်ထုတ်ပြီးပါပြီ:** `{raw_input}`")
+        else:
+            await event.respond("❌ စာရင်းထဲတွင် ရှာမတွေ့ပါ။")
+
+    # --- List Sources Command ---
+    @bot.on(events.NewMessage(pattern=r'(?i)^/sources$', outgoing=True))
+    async def sources_cmd(event):
+        if not DB.get("sources"):
+            await event.respond("📡 **လက်ရှိ ချိတ်ဆက်ထားသော Source မရှိသေးပါ။**")
+            return
+        
+        msg = "📡 **လက်ရှိ အလုပ်လုပ်နေသော ACTIVE SOURCES:**\n━━━━━━━━━━━━━━━━━━━━━━\n"
+        for idx, src in enumerate(DB["sources"], 1):
+            msg += f"{idx}. `{src}`\n"
+        await event.respond(msg)
+
+    # --- Filter Setup Command ---
+    @bot.on(events.NewMessage(pattern=r'(?i)^/filter (.+)', outgoing=True))
+    async def set_filter_cmd(event):
+        mode = event.pattern_match.group(1).strip().lower()
+        if mode in ["all", "video", "document"]:
+            DB["media_filter"] = mode
+            save_db()
+            await event.respond(f"🎞 **Media Filter Mode ကို ပြောင်းလဲလိုက်ပါပြီ:** `{mode.upper()}`")
+        else:
+            await event.respond("⚠️ `/filter all` သို့မဟုတ် `/filter video` သို့မဟုတ် `/filter document` ဟု သုံးပါ။")
+
+    # --- Header / Footer / Watermark Commands ---
+    @bot.on(events.NewMessage(pattern=r'(?i)^/header (.+)', outgoing=True))
+    async def set_header_cmd(event):
+        DB["header"] = event.pattern_match.group(1).strip()
+        save_db()
+        await event.respond(f"⬆️ **Header Text ပြောင်းလဲပြီးပါပြီ:**\n{DB['header']}")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^/footer (.+)', outgoing=True))
+    async def set_footer_cmd(event):
+        DB["footer"] = event.pattern_match.group(1).strip()
+        save_db()
+        await event.respond(f"⬇️ **Footer Text ပြောင်းလဲပြီးပါပြီ:**\n{DB['footer']}")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^/watermark (.+)', outgoing=True))
+    async def set_watermark_cmd(event):
+        DB["watermark"] = event.pattern_match.group(1).strip()
+        save_db()
+        await event.respond(f"📝 **Watermark Text ပြောင်းလဲပြီးပါပြီ:**\n{DB['watermark']}")
 
     # --- Set Target Channel Command ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/settarget (.+)', outgoing=True))
@@ -186,53 +327,18 @@ async def main():
                 entity = await bot.get_entity(raw_target)
                 DB["target_channel"] = entity.id
             save_db()
-            await event.respond(f"🎯 **Target Channel အသစ် သတ်မှတ်ပြီးပါပြီ:** `{DB['target_channel']}`")
+            await event.respond(f"🎯 **Target Channel သတ်မှတ်ပြီးပါပြီ:** `{DB['target_channel']}`")
         except Exception as e:
             await event.respond(f"❌ Target Channel သတ်မှတ်ရာတွင် အဆင်မပြေပါ: `{e}`")
-
-    # --- Set Watermark Command ---
-    @bot.on(events.NewMessage(pattern=r'(?i)^/watermark (.+)', outgoing=True))
-    async def set_watermark_cmd(event):
-        wm_text = event.pattern_match.group(1).strip()
-        DB["watermark"] = wm_text
-        save_db()
-        await event.respond(f"📝 **Watermark စာသား ပြောင်းလဲပြီးပါပြီ:**\n{wm_text}")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^/join (.+)', outgoing=True))
     async def join_cmd(event):
         link = event.pattern_match.group(1).strip()
         try:
-            if "+" in link or "joinchat" in link:
-                hash_code = link.split('/')[-1].replace('+', '')
-                await bot(functions.messages.ImportChatInviteRequest(hash_code))
-            else:
-                await bot(functions.channels.JoinChannelRequest(link))
-            await event.respond(f"✅ **အောင်မြင်စွာ Join ပြီးပါပြီ:** {link}")
+            _, title = await resolve_and_join(link)
+            await event.respond(f"✅ **အောင်မြင်စွာ Join ပြီးပါပြီ:** {title}")
         except Exception as e:
             await event.respond(f"❌ Join ရန် အဆင်မပြေပါ: `{e}`")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^/add (.+)', outgoing=True))
-    async def add_cmd(event):
-        src = event.pattern_match.group(1).strip()
-        if src not in DB["sources"]:
-            DB["sources"].append(src)
-            save_db()
-            await event.respond(f"📡 **Source List ထဲထည့်ပြီးပါပြီ:** `{src}`\n🔄 ကားအဟောင်းများကို စတင်ဆွဲတင်နေပါပြီ...")
-            asyncio.create_task(clone_old_videos(src))
-        else:
-            await event.respond("⚠️ ရှိပြီးသား Source ဖြစ်ပါသည် ဆရာကြီး။")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^/priority (.+)', outgoing=True))
-    async def priority_cmd(event):
-        src = event.pattern_match.group(1).strip()
-        if src not in DB["priority_sources"]:
-            DB["priority_sources"].append(src)
-            if src not in DB["sources"]:
-                DB["sources"].append(src)
-            save_db()
-            await event.respond(f"⭐ **[Priority] ဦးစားပေး စာရင်းထဲထည့်ပြီးပါပြီ:** `{src}`")
-        else:
-            await event.respond("⚠️ ဦးစားပေး စာရင်းထဲတွင် ရှိပြီးသားပါ။")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^/search (.+)', outgoing=True))
     async def search_cmd(event):
@@ -240,7 +346,7 @@ async def main():
         results = [v for k, v in DB["catalog"].items() if query in k]
 
         if not results:
-            await event.respond("❌ ရှာဖွေမှုရလဒ် မရှိပါ ဆရာကြီး။")
+            await event.respond("❌ ရှာဖွေမှုရလဒ် မရှိပါ။")
             return
 
         msg = "🔍 **ရှာဖွေတွေ့ရှိသော ရုပ်ရှင်မှတ်တမ်းများ:**\n━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -255,19 +361,19 @@ async def main():
         cpu = psutil.cpu_percent()
         today = datetime.now().strftime("%Y-%m-%d")
         today_count = DB["daily_stats"].get(today, 0)
-        target_info = DB.get("target_channel", "မသတ်မှတ်ရသေးပါ")
 
         status_msg = (
-            "📊 **ULTRA ENGINE HARDWARE MONITOR**\n"
+            "📊 **ULTRA ENGINE HARDWARE MONITOR v3.0**\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             f"⚡ **Status:** `{DB.get('status', 'ON')}`\n"
-            f"🎯 **Target Channel:** `{target_info}`\n"
+            f"🎯 **Target Channel:** `{DB.get('target_channel')}`\n"
+            f"🎞 **Media Filter:** `{DB.get('media_filter', 'all').upper()}`\n"
             f"📡 **Active Sources:** `{len(DB.get('sources', []))} Channels`\n"
             f"⏱ **Bot Uptime:** `{uptime}`\n"
-            f"🎛 **Railway CPU Usage:** `{cpu}%`\n"
-            f"🧠 **Railway RAM Usage:** `{ram}%`\n"
-            f"📅 **Today Uploads ({today}):** `{today_count} Movies`\n"
-            f"📦 **Total Cataloged:** `{len(DB['catalog'])} Movies`\n"
+            f"🎛 **Railway CPU:** `{cpu}%`\n"
+            f"🧠 **Railway RAM:** `{ram}%`\n"
+            f"📅 **Today Uploads:** `{today_count} Movies`\n"
+            f"📦 **Cataloged Total:** `{len(DB['catalog'])} Movies`\n"
             f"🚫 **Duplicates Blocked:** `{len(DB['duplicates'])} Files`"
         )
         await event.respond(status_msg)
@@ -275,34 +381,19 @@ async def main():
     @bot.on(events.NewMessage(pattern=r'(?i)^/backup$', outgoing=True))
     async def backup_cmd(event):
         save_db()
-        await bot.send_file(event.chat_id, DB_FILE, caption="📦 **Ultimate Bot Engine Database Backup File**")
+        await event.respond(file=DB_FILE, caption="📦 **Database Backup File**")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^/clear$', outgoing=True))
     async def clear_cmd(event):
         DB["sources"] = []
-        DB["priority_sources"] = []
         save_db()
-        await event.respond("🗑 **Sources List အားလုံးကို ရှင်းလင်းလိုက်ပါပြီ။**")
+        await event.respond("🗑 **Sources စာရင်း အားလုံးကို ရှင်းထုတ်လိုက်ပါပြီ။**")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^/toggle$', outgoing=True))
     async def toggle_cmd(event):
         DB["status"] = "OFF" if DB.get("status") == "ON" else "ON"
         save_db()
-        await event.respond(f"⚙️ **Engine Status သို့ ပြောင်းလဲလိုက်ပါပြီ:** `{DB['status']}`")
-
-    # Restore Command Handling (Reply to ultimate_db.json file)
-    @bot.on(events.NewMessage(outgoing=True))
-    async def restore_cmd(event):
-        if event.text == "/restore" and event.is_reply:
-            reply_msg = await event.get_reply_message()
-            if reply_msg.document and reply_msg.document.attributes[0].file_name == DB_FILE:
-                global DB
-                path = await reply_msg.download_media()
-                with open(path, "r", encoding="utf-8") as f:
-                    DB = json.load(f)
-                save_db()
-                os.remove(path)
-                await event.respond("✅ **Database/Settings အားလုံးကို Backup ဖိုင်မှတစ်ဆင့် Restore အောင်မြင်ပါပြီ!**")
+        await event.respond(f"⚙️ **Engine Status:** `{DB['status']}`")
 
     # --- Live Real-Time Forwarder Listener ---
     @bot.on(events.NewMessage())
@@ -312,21 +403,15 @@ async def main():
         try:
             chat = await event.get_chat()
             is_in_list = False
+            
             for src in DB["sources"]:
                 if chat and chat.username and f"@{chat.username.lower()}" == src.lower():
                     is_in_list = True
-                elif chat and str(chat.id) == src.lstrip('-'):
+                elif chat and str(chat.id) == src:
                     is_in_list = True
 
             if is_in_list and (event.message.video or event.message.document):
-                caption = event.message.text or ""
-                if DB.get("clean_ads", True):
-                    caption = re.sub(r'http\S+', '', caption)
-                    caption = re.sub(r'@\S+', '', caption)
-                    caption = re.sub(r'(?i)(join|sub|channel|promo|1xbet|sponsor)', '', caption)
-                if DB.get("watermark"):
-                    caption = f"**{caption.strip()}**\n\n{DB['watermark']}" if caption.strip() else DB["watermark"]
-
+                caption = build_caption(event.message.text)
                 await safe_upload(event.message, caption)
         except Exception:
             pass
