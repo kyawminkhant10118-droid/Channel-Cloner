@@ -11,15 +11,15 @@ from datetime import datetime
 from threading import Thread
 from flask import Flask
 
-# Suppress Werkzeug logs for cleaner Railway terminal output
+# Suppress Werkzeug logs for clean terminal output
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
-# --- 1. Web Server (Railway Keep-Alive Server) ---
+# --- 1. Web Server (Railway Keep-Alive) ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Ultra Pro Engine v6.0 (Production Grade) is Live!"
+    return "Ultra Pro Engine v7.5 (Speed Max + Progress Edition) is Live!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -34,7 +34,8 @@ API_ID = 38078790
 API_HASH = 'c1b7e324a99544d7a9229ff5324af362'
 SESSION_STRING = os.environ.get("SESSION_STRING")
 
-# --- 3. Persistent JSON Database Setup ---
+# --- 3. Speed Max Configuration ---
+CONCURRENT_WORKERS = 5  # 5 Parallel Workers for Multi-upload
 DB_FILE = "ultimate_db.json"
 TEMP_DIR = "temp_downloads"
 THUMB_PATH = "custom_thumb.jpg"
@@ -53,6 +54,7 @@ def load_db():
         "duplicates": [],
         "catalog": {},
         "daily_stats": {},
+        "crawler_progress": {},
         "header": "",
         "watermark": " **Uploaded by Our Channel**",
         "footer": "",
@@ -72,10 +74,18 @@ def save_db():
 DB = load_db()
 start_time = time.time()
 
-# --- 4. Userbot Client Initialization ---
-bot = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+# --- Async Multi-Worker Task Queue ---
+upload_queue = asyncio.Queue()
 
-# --- Admin Log Sender Helper ---
+# --- 4. High-Speed Client Setup ---
+bot = TelegramClient(
+    StringSession(SESSION_STRING), 
+    API_ID, 
+    API_HASH,
+    connection_retries=10,
+    retry_delay=1
+)
+
 async def send_log(text):
     log_id = DB.get("log_channel")
     if log_id:
@@ -84,52 +94,21 @@ async def send_log(text):
         except Exception as e:
             print(f"[-] Log Send Failed: {e}")
 
-# --- FFmpeg Auto Screenshot Generator ---
-def generate_auto_screenshot(video_path):
-    auto_thumb_path = os.path.join(TEMP_DIR, "auto_frame_thumb.jpg")
-    try:
-        cmd = [
-            "ffmpeg", "-y",
-            "-ss", "00:00:10",
-            "-i", video_path,
-            "-vframes", "1",
-            "-q:v", "2",
-            auto_thumb_path
-        ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        if os.path.exists(auto_thumb_path) and os.path.getsize(auto_thumb_path) > 0:
-            print("[] Auto Screenshot Thumbnail Generated Successfully!")
-            return auto_thumb_path
-    except Exception as e:
-        print(f"[-] FFmpeg Screenshot Error: {e}")
-    return None
-
-# --- Smart Safe Telegram Command Menu Resolver ---
 async def setup_bot_command_menu():
     try:
-        # Check if current session is a Bot API account
         if not await bot.is_bot():
-            print("[] Userbot Mode Detected: Skipping Telegram Bot API Menu setup (Userbot mode Active).")
             return
-
         commands = [
             types.BotCommand(command="start", description=" Main Help Menu"),
-            types.BotCommand(command="status", description=" Engine Hardware & Diagnostics"),
+            types.BotCommand(command="status", description=" Live Progress & Diagnostics"),
             types.BotCommand(command="add", description=" Add Source Channel"),
             types.BotCommand(command="del", description=" Remove Source Channel"),
-            types.BotCommand(command="sources", description=" List Active Source Channels"),
+            types.BotCommand(command="sources", description=" List Active Sources"),
             types.BotCommand(command="settarget", description=" Set Target Channel"),
-            types.BotCommand(command="setthumb", description=" Set Custom Poster Thumbnail"),
-            types.BotCommand(command="delthumb", description=" Delete Custom Thumbnail"),
-            types.BotCommand(command="setlog", description=" Set Admin Log Channel"),
-            types.BotCommand(command="replacelink", description=" Auto Replace External Links"),
-            types.BotCommand(command="filter", description=" Set Media Filter (all/video/doc)"),
-            types.BotCommand(command="header", description=" Set Caption Header Text"),
-            types.BotCommand(command="footer", description=" Set Caption Footer Text"),
-            types.BotCommand(command="watermark", description=" Set Caption Watermark"),
-            types.BotCommand(command="join", description=" Auto Join Channel by Link"),
-            types.BotCommand(command="search", description=" Search Movies in Database"),
-            types.BotCommand(command="backup", description=" Download Database Backup File"),
+            types.BotCommand(command="setthumb", description=" Set Custom Poster"),
+            types.BotCommand(command="delthumb", description=" Del Thumb (Max Speed Mode)"),
+            types.BotCommand(command="setlog", description=" Set Log Channel"),
+            types.BotCommand(command="backup", description=" Download DB Backup"),
             types.BotCommand(command="toggle", description=" Pause or Resume Engine")
         ]
         await bot(functions.bots.SetBotCommandsRequest(
@@ -137,11 +116,9 @@ async def setup_bot_command_menu():
             lang_code='en',
             commands=commands
         ))
-        print("[+] Official Telegram Command Menu Registered Successfully!")
-    except Exception as e:
-        print(f"[!] Command Menu Info: Handled safely ({e})")
+    except Exception:
+        pass
 
-# --- Session Refresher Service ---
 async def session_refresher():
     while True:
         try:
@@ -150,10 +127,8 @@ async def session_refresher():
             pass
         await asyncio.sleep(1800)
 
-# --- Caption Builder with Link Replacement ---
 def build_caption(original_text):
     caption = original_text or ""
-    
     rep_link = DB.get("replace_link")
     if rep_link:
         caption = re.sub(r'https?://t\.me/\S+', rep_link, caption)
@@ -174,11 +149,10 @@ def build_caption(original_text):
     
     return "\n\n".join(parts)
 
-# --- High-Speed Restricted Bypass Upload Engine ---
+# ---  SPEED MAX ZERO-DISK TRANSFER ENGINE ---
 async def safe_upload(message, caption):
     target = DB.get("target_channel")
     if not target:
-        print("[-] Target Channel စာရင်း မရှိသေးပါ။ /settarget ဖြင့် အရင် သတ်မှတ်ပေးပါ။")
         return False
 
     media_mode = DB.get("media_filter", "all")
@@ -190,63 +164,50 @@ async def safe_upload(message, caption):
     file_id = str(message.media.document.id) if (message.video or message.document) else None
 
     if file_id and file_id in DB.get("duplicates", []):
-        print(f"[-] Duplicate File Skipped: {file_id}")
         return False
 
-    is_noforward = getattr(message, 'noforward', False) or getattr(getattr(message, 'chat', None), 'noforward', False)
     thumb_to_use = THUMB_PATH if os.path.exists(THUMB_PATH) else None
 
-    video_attrs = []
-    if message.media and hasattr(message.media, 'document') and message.media.document and hasattr(message.media.document, 'attributes'):
-        video_attrs = message.media.document.attributes
+    # LEVEL 1: Direct Cloud Transfer (0.5 - 1s Speed)
+    try:
+        if not thumb_to_use and message.media:
+            sent_msg = await bot.send_file(
+                target, 
+                message.media, 
+                caption=caption.strip(),
+                supports_streaming=True
+            )
+            if sent_msg:
+                if file_id: DB["duplicates"].append(file_id)
+                save_db()
+                print(f"[ SPEED MAX SUCCESS] Instant Cloud Forward Completed!")
+                return True
+    except Exception as forward_err:
+        print(f"[!] Direct Forward Bypass Error: {forward_err} -> Fallback to Chunk Buffer...")
 
+    # LEVEL 2: 1024KB Multi-part Parallel Chunk Buffer
     while True:
         try:
-            sent_msg = None
+            os.makedirs(TEMP_DIR, exist_ok=True)
+            temp_path = await bot.download_media(message, file=TEMP_DIR)
             
-            # Direct Forward Attempt
-            if not is_noforward and not thumb_to_use:
-                try:
-                    sent_msg = await bot.send_file(target, message.media, caption=caption.strip())
-                except Exception:
-                    print("[!] Direct Send Blocked, Switching to Fast Download Mode...")
-                    is_noforward = True
-
-            # Fast Restricted / Auto Screenshot Buffer Mode
-            if is_noforward or thumb_to_use or not sent_msg:
-                os.makedirs(TEMP_DIR, exist_ok=True)
-                print("[] Downloading video buffer (High-Speed)...")
-                
-                temp_path = await bot.download_media(message, file=TEMP_DIR)
-                auto_gen_thumb = None
-                
-                try:
-                    if not thumb_to_use:
-                        auto_gen_thumb = generate_auto_screenshot(temp_path)
-                    
-                    final_thumb = thumb_to_use or auto_gen_thumb
-
-                    print("[] Re-uploading to Target Channel as Streaming Video...")
-                    sent_msg = await bot.send_file(
-                        target, 
-                        temp_path, 
-                        caption=caption.strip(),
-                        thumb=final_thumb,
-                        attributes=video_attrs,
-                        supports_streaming=True,
-                        part_size_kb=512
-                    )
-                finally:
-                    if temp_path and os.path.exists(temp_path):
-                        os.remove(temp_path)
-                    if auto_gen_thumb and os.path.exists(auto_gen_thumb):
-                        os.remove(auto_gen_thumb)
+            try:
+                sent_msg = await bot.send_file(
+                    target, 
+                    temp_path, 
+                    caption=caption.strip(),
+                    thumb=thumb_to_use,
+                    supports_streaming=True,
+                    part_size_kb=1024
+                )
+            finally:
+                if temp_path and os.path.exists(temp_path):
+                    os.remove(temp_path)
 
             if sent_msg:
-                if file_id:
-                    DB["duplicates"].append(file_id)
-
-                title = message.text.split("\n")[0][:50] if message.text else "Unknown Movie"
+                if file_id: DB["duplicates"].append(file_id)
+                
+                title = message.text.split("\n")[0][:50] if message.text else "Unknown Video"
                 clean_target = str(target).replace('-100', '')
                 msg_link = f"https://t.me/c/{clean_target}/{sent_msg.id}"
                 DB["catalog"][title.lower()] = {"title": title, "link": msg_link}
@@ -255,34 +216,76 @@ async def safe_upload(message, caption):
                 DB["daily_stats"][today] = DB["daily_stats"].get(today, 0) + 1
                 save_db()
 
-                await send_log(f" **Uploaded Successfully:**\n {title}\n [View Post]({msg_link})")
-                print(f"[+] Successfully Uploaded: {title}")
+                await send_log(f" **Uploaded:**\n {title}\n [View Post]({msg_link})")
                 return True
 
         except errors.FloodWaitError as e:
-            print(f"[!] FloodWait: Waiting {e.seconds}s...")
-            await asyncio.sleep(e.seconds + 5)
+            await asyncio.sleep(e.seconds + 2)
         except Exception as upload_err:
             print(f"[-] Upload Error: {upload_err}")
-            await send_log(f" **Upload Failed:** {upload_err}")
             return False
 
-# --- History Movie Crawler Engine ---
+# --- Concurrent Parallel Queue Workers ---
+async def queue_worker(worker_id):
+    print(f"[ Worker-{worker_id}] High-Speed Worker Active.")
+    while True:
+        message, caption = await upload_queue.get()
+        try:
+            await safe_upload(message, caption)
+        except Exception as e:
+            print(f"[-] Worker-{worker_id} Task Error: {e}")
+        finally:
+            upload_queue.task_done()
+            await asyncio.sleep(0.5)
+
+# ---  History Crawler Engine with Progress Tracker (%) ---
 async def clone_old_videos(source_chat):
-    print(f"[+] History Crawler Started for Source: {source_chat}")
+    print(f"[+] History Speed Crawler Started for: {source_chat}")
     try:
+        total_res = await bot.get_messages(source_chat, limit=0)
+        total_msgs = total_res.total if total_res else 0
+
+        if total_msgs == 0:
+            print(f"[-] No messages found in {source_chat}")
+            return
+
+        scanned = 0
+        media_found = 0
+
+        if "crawler_progress" not in DB:
+            DB["crawler_progress"] = {}
+
         async for message in bot.iter_messages(source_chat, reverse=True):
             if DB.get("status") == "OFF":
-                print("[-] Bot Engine is Paused. Crawler Stopping.")
+                print("[!] Engine paused. Stopping crawler...")
                 break
+
+            scanned += 1
+
             if message.video or message.document:
                 caption = build_caption(message.text)
-                await safe_upload(message, caption)
-                await asyncio.sleep(2.0)
-    except Exception as crawler_err:
-        print(f"[-] Crawler Execution Error on {source_chat}: {crawler_err}")
+                await upload_queue.put((message, caption))
+                media_found += 1
 
-# --- Link & Username Smart Resolver Helper ---
+            pct = round((scanned / total_msgs) * 100, 1)
+
+            DB["crawler_progress"][str(source_chat)] = {
+                "total": total_msgs,
+                "scanned": scanned,
+                "media_found": media_found,
+                "percent": pct
+            }
+
+            if scanned % 50 == 0 or scanned == total_msgs:
+                print(f"[ PROGRESS] Channel: {source_chat} | {pct}% Scanned ({scanned}/{total_msgs}) | Found: {media_found} Videos")
+                save_db()
+
+        print(f"[ CRAWLE COMPLETED] {source_chat} -> 100% Fully Queued!")
+
+    except Exception as crawler_err:
+        print(f"[-] Crawler Error ({source_chat}): {crawler_err}")
+
+# --- Resolver Helper ---
 async def resolve_and_join(link_or_username):
     target_str = link_or_username.strip()
     
@@ -304,208 +307,137 @@ async def resolve_and_join(link_or_username):
         identifier = f"@{entity.username}" if entity.username else str(entity.id)
         return identifier, entity.title
     except Exception as e:
-        raise Exception(f"Link / Username ကို ဖတ်၍ မရပါ: {e}")
+        raise Exception(f"Link / Username Error: {e}")
 
-# --- Main Engine Core Execution ---
+# --- Main Engine Loop ---
 async def main():
     await bot.start()
     print("==================================================")
-    print(" ULTRA PRO ENGINE v6.0 (PRODUCTION GRADE) IS LIVE!")
+    print(" ULTRA PRO ENGINE v7.5 (PROGRESS EDITION) LIVE ")
     print("==================================================")
     
     await setup_bot_command_menu()
+    
+    for i in range(1, CONCURRENT_WORKERS + 1):
+        asyncio.create_task(queue_worker(i))
+
     asyncio.create_task(session_refresher())
 
-    # --- Start & Main Help Menu Command ---
+    # --- Commands ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/start$', outgoing=True))
     async def start_cmd(event):
-        target_info = DB.get("target_channel", "မသတ်မှတ်ရသေးပါ")
+        target_info = DB.get("target_channel", "Not Set")
+        speed_status = " SPEED MAX (Zero-Disk Cloud Copy)" if not os.path.exists(THUMB_PATH) else " NORMAL (Custom Poster Active)"
+        
         menu_text = (
-            " **ULTRA PRO USERBOT ENGINE v6.0** \n"
-            "*(Production Grade & Smart Bypass)*\n"
+            " **ULTRA PRO USERBOT v7.5 (PROGRESS EDITION)** \n"
             "\n"
             f" **Target Channel:** `{target_info}`\n"
-            f" **Log Channel:** `{DB.get('log_channel', 'Not Set')}`\n"
-            f" **Custom Thumb:** `{'ENABLED' if os.path.exists(THUMB_PATH) else 'AUTO SCREENSHOT MODE'}`\n"
-            f" **Link Replacer:** `{DB.get('replace_link', 'Disabled')}`\n\n"
-            
-            " **1. ADVANCED FEATURES:**\n"
-            " `/setthumb` - ပုံ ပို့ပေးပြီး Custom Poster သတ်မှတ်ရန်\n"
-            " `/delthumb` - Auto Screenshot စနစ် ပြန်သုံးရန်\n"
-            " `/setlog <ID>` - Error/Upload Log ကြည့်မည့် Channel\n"
-            " `/replacelink <Link>` - Link များ Auto အစားထိုးရန်\n"
-            " `/filter <all/video/document>` - Media အမျိုးအစား သတ်မှတ်ရန်\n"
-            " `/header` | `/footer` | `/watermark` - စာသားများ ပြင်ဆင်ရန်\n\n"
+            f" **Engine Mode:** `{speed_status}`\n"
+            f" **Active Workers:** `{CONCURRENT_WORKERS} Parallel Workers`\n"
+            f" **Queue Pending:** `{upload_queue.qsize()} Files`\n\n"
 
-            " **2. SOURCE & TARGET COMMANDS:**\n"
-            " `/add <Link/Username>` - Source ထည့်ရန်\n"
-            " `/del <Link/Username>` - Source ပြန်ဖြုတ်ရန်\n"
-            " `/sources` - Source ချန်နယ်များ စာရင်းကြည့်ရန်\n"
-            " `/settarget <ID/Username>` - Target Channel ပြောင်းရန်\n"
-            " `/join <Link>` - Channel အလိုအလျောက် Join ရန်\n\n"
-
-            " **3. CONTROL & MONITORING:**\n"
-            " `/status` - Hardware & Server စစ်ဆေးရန်\n"
-            " `/search <နာမည်>` - Database ထဲ ရုပ်ရှင်ပြန်ရှာရန်\n"
-            " `/backup` - DB ဖိုင် ထုတ်ယူရန်\n"
-            " `/toggle` - Bot မောင်းနှင်မှု ခဏရပ်/ပြန်ဖွင့်ရန်"
+            " **COMMANDS:**\n"
+            " `/status` - Live Progress (%) & Diagnostic\n"
+            " `/add <Link>` - Add Source & Auto-Clone\n"
+            " `/del <Link>` - Remove Source Channel\n"
+            " `/sources` - View Active Source List\n"
+            " `/delthumb` - Switch to Speed Max Mode\n"
+            " `/backup` - Download Database Backup"
         )
         await event.respond(menu_text)
 
-    # --- Ultra Detailed Status Dashboard Command ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/status$', outgoing=True))
     async def status_cmd(event):
         uptime_sec = int(time.time() - start_time)
         hours, remainder = divmod(uptime_sec, 3600)
         minutes, seconds = divmod(remainder, 60)
-        uptime_str = f"{hours}h {minutes}m {seconds}s"
 
         vram = psutil.virtual_memory()
-        ram_used_mb = round(vram.used / (1024 * 1024), 2)
-        ram_total_mb = round(vram.total / (1024 * 1024), 2)
-
         cpu_pct = psutil.cpu_percent(interval=0.5)
-
         today = datetime.now().strftime("%Y-%m-%d")
-        today_count = DB["daily_stats"].get(today, 0)
+
+        progress_text = ""
+        crawler_data = DB.get("crawler_progress", {})
+        if crawler_data:
+            progress_text += "\n **CHANNEL CLONING PROGRESS:**\n"
+            for src, data in crawler_data.items():
+                progress_text += (
+                    f" `{src}`: **{data['percent']}%** "
+                    f"({data['scanned']}/{data['total']} msgs) "
+                    f"-  `{data['media_found']} Videos`\n"
+                )
 
         status_msg = (
-            " **ULTRA ENGINE HARDWARE & DIAGNOSTICS v6.0**\n"
+            " **SPEED MAX DIAGNOSTICS v7.5** \n"
             "\n"
-            f" **Status:** `{DB.get('status', 'ON')}` | **Sources:** `{len(DB.get('sources', []))}`\n"
-            f" **CPU Utilization:** `{cpu_pct}%`\n"
-            f" **RAM Usage:** `{ram_used_mb} MB / {ram_total_mb} MB ({vram.percent}%)`\n"
-            f" **Engine Uptime:** `{uptime_str}`\n\n"
-
-            " **UPLOAD STATISTICS:**\n"
-            f" **Today Uploads ({today}):** `{today_count} Movies`\n"
-            f" **Total Cataloged:** `{len(DB.get('catalog', {}))} Files`\n"
-            f" **Duplicates Blocked:** `{len(DB.get('duplicates', []))} Files`\n"
+            f" **Parallel Workers:** `{CONCURRENT_WORKERS} Active Threads`\n"
+            f" **Queue Pending:** `{upload_queue.qsize()} Videos in Queue`\n"
+            f" **CPU Usage:** `{cpu_pct}%`\n"
+            f" **RAM Usage:** `{vram.percent}%`\n"
+            f" **Uptime:** `{hours}h {minutes}m`\n"
+            f"{progress_text}\n"
+            f" **Today Uploads:** `{DB['daily_stats'].get(today, 0)} Files`\n"
             ""
         )
         await event.respond(status_msg)
 
-    # --- Custom Thumbnail Commands ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/setthumb$', outgoing=True))
     async def setthumb_cmd(event):
         reply = await event.get_reply_message()
         if reply and reply.photo:
             await bot.download_media(reply.photo, file=THUMB_PATH)
-            await event.respond(" **Custom Thumbnail Poster သတ်မှတ်လိုက်ပါပြီ!**")
+            await event.respond(" Custom Poster Set!")
         else:
-            await event.respond(" Thumbnail သတ်မှတ်ရန် ပုံကို Reply ပြန်ပြီး `/setthumb` ဟု ရိုက်ပါ။")
+            await event.respond(" Reply to an image with `/setthumb`")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^/delthumb$', outgoing=True))
     async def delthumb_cmd(event):
         if os.path.exists(THUMB_PATH):
             os.remove(THUMB_PATH)
-            await event.respond(" **Custom Thumbnail ဖျက်ပြီးပါပြီ (Auto Screenshot Mode သို့ ရောက်ရှိသွားပါပြီ)။**")
+            await event.respond(" **Poster Removed! Switched to Speed Max Zero-Disk Mode!**")
         else:
-            await event.respond(" Custom Thumbnail မရှိသေးပါ။")
+            await event.respond(" Custom Thumbnail does not exist.")
 
-    # --- Set Log Channel Command ---
-    @bot.on(events.NewMessage(pattern=r'(?i)^/setlog (.+)', outgoing=True))
-    async def setlog_cmd(event):
-        log_id = event.pattern_match.group(1).strip()
-        try:
-            DB["log_channel"] = int(log_id) if (log_id.startswith('-') or log_id.isdigit()) else log_id
-            save_db()
-            await event.respond(f" **Admin Log Channel သတ်မှတ်ပြီးပါပြီ:** `{DB['log_channel']}`")
-        except Exception as e:
-            await event.respond(f" Log Channel သတ်မှတ်၍ မရပါ: `{e}`")
-
-    # --- Set Replace Link Command ---
-    @bot.on(events.NewMessage(pattern=r'(?i)^/replacelink (.+)', outgoing=True))
-    async def replacelink_cmd(event):
-        link = event.pattern_match.group(1).strip()
-        DB["replace_link"] = link
-        save_db()
-        await event.respond(f" **Link Auto-Replacer သတ်မှတ်ပြီးပါပြီ:** `{link}`")
-
-    # --- Add Source Command ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/add (.+)', outgoing=True))
     async def add_cmd(event):
         raw_input = event.pattern_match.group(1).strip()
-        await event.respond(f" **Link အား စစ်ဆေး၍ Join နေပါသည်...**\n`{raw_input}`")
-        
+        await event.respond(f" **Adding Source & Starting Crawler...**\n`{raw_input}`")
         try:
             identifier, title = await resolve_and_join(raw_input)
             src_key = str(identifier)
-            
             if src_key not in DB["sources"]:
                 DB["sources"].append(src_key)
                 save_db()
-                await event.respond(
-                    f" **Source ထည့်သွင်းခြင်း အောင်မြင်ပါသည်!**\n"
-                    f"\n"
-                    f" **Title:** `{title}`\n"
-                    f" **Source:** `{src_key}`"
-                )
+                await event.respond(f" **Source Added:** `{title}`")
                 asyncio.create_task(clone_old_videos(src_key))
             else:
-                await event.respond(" ဤ Source သည် စာရင်းထဲတွင် ရှိပြီးသား ဖြစ်ပါသည်။")
+                await event.respond(" Source already exists.")
         except Exception as e:
-            await event.respond(f" Source ထည့်၍ မရပါ: `{e}`")
+            await event.respond(f" Error: `{e}`")
 
-    # --- Delete Source Command ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/del (.+)', outgoing=True))
     async def del_cmd(event):
         raw_input = event.pattern_match.group(1).strip()
-        found = False
-        for src in list(DB["sources"]):
-            if raw_input in src or src in raw_input:
-                DB["sources"].remove(src)
-                found = True
-        
-        if found:
+        if raw_input in DB["sources"]:
+            DB["sources"].remove(raw_input)
+            if raw_input in DB.get("crawler_progress", {}):
+                del DB["crawler_progress"][raw_input]
             save_db()
-            await event.respond(f" **Source ကို စာရင်းမှ ဖျက်ထုတ်ပြီးပါပြီ:** `{raw_input}`")
+            await event.respond(f" **Removed Source:** `{raw_input}`")
         else:
-            await event.respond(" စာရင်းထဲတွင် ရှာမတွေ့ပါ။")
+            await event.respond(" Source not found in DB.")
 
-    # --- List Sources Command ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/sources$', outgoing=True))
     async def sources_cmd(event):
         if not DB.get("sources"):
-            await event.respond(" **လက်ရှိ ချိတ်ဆက်ထားသော Source မရှိသေးပါ။**")
+            await event.respond(" **No Active Sources.**")
             return
-        
-        msg = " **လက်ရှိ အလုပ်လုပ်နေသော ACTIVE SOURCES:**\n\n"
+        msg = " **ACTIVE SOURCES:**\n\n"
         for idx, src in enumerate(DB["sources"], 1):
             msg += f"{idx}. `{src}`\n"
         await event.respond(msg)
 
-    # --- Filter Setup Command ---
-    @bot.on(events.NewMessage(pattern=r'(?i)^/filter (.+)', outgoing=True))
-    async def set_filter_cmd(event):
-        mode = event.pattern_match.group(1).strip().lower()
-        if mode in ["all", "video", "document"]:
-            DB["media_filter"] = mode
-            save_db()
-            await event.respond(f" **Media Filter Mode ကို ပြောင်းလဲလိုက်ပါပြီ:** `{mode.upper()}`")
-        else:
-            await event.respond(" `/filter all` သို့မဟုတ် `/filter video` သို့မဟုတ် `/filter document` ဟု သုံးပါ။")
-
-    # --- Header / Footer / Watermark Commands ---
-    @bot.on(events.NewMessage(pattern=r'(?i)^/header (.+)', outgoing=True))
-    async def set_header_cmd(event):
-        DB["header"] = event.pattern_match.group(1).strip()
-        save_db()
-        await event.respond(f" **Header Text ပြောင်းလဲပြီးပါပြီ:**\n{DB['header']}")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^/footer (.+)', outgoing=True))
-    async def set_footer_cmd(event):
-        DB["footer"] = event.pattern_match.group(1).strip()
-        save_db()
-        await event.respond(f" **Footer Text ပြောင်းလဲပြီးပါပြီ:**\n{DB['footer']}")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^/watermark (.+)', outgoing=True))
-    async def set_watermark_cmd(event):
-        DB["watermark"] = event.pattern_match.group(1).strip()
-        save_db()
-        await event.respond(f" **Watermark Text ပြောင်းလဲပြီးပါပြီ:**\n{DB['watermark']}")
-
-    # --- Set Target Channel Command ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/settarget (.+)', outgoing=True))
     async def settarget_cmd(event):
         raw_target = event.pattern_match.group(1).strip()
@@ -516,49 +448,22 @@ async def main():
                 entity = await bot.get_entity(raw_target)
                 DB["target_channel"] = entity.id
             save_db()
-            await event.respond(f" **Target Channel သတ်မှတ်ပြီးပါပြီ:** `{DB['target_channel']}`")
+            await event.respond(f" **Target Set:** `{DB['target_channel']}`")
         except Exception as e:
-            await event.respond(f" Target Channel သတ်မှတ်ရာတွင် အဆင်မပြေပါ: `{e}`")
+            await event.respond(f" Error: `{e}`")
 
-    # --- Join Command ---
-    @bot.on(events.NewMessage(pattern=r'(?i)^/join (.+)', outgoing=True))
-    async def join_cmd(event):
-        link = event.pattern_match.group(1).strip()
-        try:
-            _, title = await resolve_and_join(link)
-            await event.respond(f" **အောင်မြင်စွာ Join ပြီးပါပြီ:** {title}")
-        except Exception as e:
-            await event.respond(f" Join ရန် အဆင်မပြေပါ: `{e}`")
-
-    # --- Search Catalog Command ---
-    @bot.on(events.NewMessage(pattern=r'(?i)^/search (.+)', outgoing=True))
-    async def search_cmd(event):
-        query = event.pattern_match.group(1).strip().lower()
-        results = [v for k, v in DB["catalog"].items() if query in k]
-
-        if not results:
-            await event.respond(" ရှာဖွေမှုရလဒ် မရှိပါ။")
-            return
-
-        msg = " **ရှာဖွေတွေ့ရှိသော ရုပ်ရှင်မှတ်တမ်းများ:**\n\n"
-        for res in results[:15]:
-            msg += f" [{res['title']}]({res['link']})\n"
-        await event.respond(msg, link_preview=False)
-
-    # --- Database Backup Command ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/backup$', outgoing=True))
     async def backup_cmd(event):
         save_db()
         await event.respond(file=DB_FILE, caption=" **Database Backup File**")
 
-    # --- Toggle Engine Command ---
     @bot.on(events.NewMessage(pattern=r'(?i)^/toggle$', outgoing=True))
     async def toggle_cmd(event):
         DB["status"] = "OFF" if DB.get("status") == "ON" else "ON"
         save_db()
         await event.respond(f" **Engine Status:** `{DB['status']}`")
 
-    # --- Live Real-Time Forwarder Listener ---
+    # Live Real-Time Forward Listener
     @bot.on(events.NewMessage())
     async def live_forwarder(event):
         if DB.get("status") == "OFF" or not DB.get("sources"):
@@ -566,7 +471,6 @@ async def main():
         try:
             chat = await event.get_chat()
             is_in_list = False
-            
             for src in DB["sources"]:
                 if chat and chat.username and f"@{chat.username.lower()}" == src.lower():
                     is_in_list = True
@@ -575,7 +479,7 @@ async def main():
 
             if is_in_list and (event.message.video or event.message.document):
                 caption = build_caption(event.message.text)
-                await safe_upload(event.message, caption)
+                await upload_queue.put((event.message, caption))
         except Exception:
             pass
 
