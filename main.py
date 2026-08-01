@@ -18,7 +18,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return " Ultimate Supreme VIP Engine v13.0 is Live!"
+    return " Ultimate Supreme VIP Engine (Full Control) is Live!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -47,7 +47,7 @@ def load_db():
         except Exception:
             pass
     return {
-        "target_channels": [-1003351682369],  # Support multiple targets
+        "target_channels": [-1003351682369],
         "log_channel": None,
         "sources": [],
         "duplicates": [],
@@ -77,13 +77,11 @@ DB = load_db()
 start_time = time.time()
 upload_queue = asyncio.Queue()
 
-# --- Visual Progress Bar Generator ---
 def make_progress_bar(percent):
     filled = int(percent // 10)
     bar = "" * filled + "" * (10 - filled)
     return bar
 
-# --- Auto Hashtag Generator ---
 def generate_hashtags(text):
     text_lower = text.lower()
     keywords = ['1080p', '720p', '4k', 'action', 'horror', 'comedy', 'romance', 
@@ -142,7 +140,6 @@ async def send_log(text):
         except:
             pass
 
-# ---  MULTI-TARGET ZERO-DISK TRANSFER ENGINE ---
 async def safe_upload(message, caption):
     targets = DB.get("target_channels", [])
     if not targets: return False
@@ -205,7 +202,6 @@ async def safe_upload(message, caption):
         return True
     return False
 
-# --- Concurrent Parallel Queue Workers ---
 async def queue_worker(worker_id):
     while True:
         message, caption = await upload_queue.get()
@@ -217,7 +213,6 @@ async def queue_worker(worker_id):
             upload_queue.task_done()
             await asyncio.sleep(0.3)
 
-# ---  History Crawler Engine ---
 async def clone_old_videos(source_chat):
     try:
         total_res = await bot.get_messages(source_chat, limit=0)
@@ -251,7 +246,6 @@ async def clone_old_videos(source_chat):
     except Exception as e:
         await send_log(f"Error in Supreme crawler for `{source_chat}`: `{e}`")
 
-# --- Resolver Helper ---
 async def resolve_and_join(link_or_username):
     target_str = link_or_username.strip()
     if "t.me/" in target_str and not ("+" in target_str or "joinchat" in target_str):
@@ -270,112 +264,56 @@ async def resolve_and_join(link_or_username):
     except Exception as e:
         raise Exception(str(e))
 
-# --- Main Engine Loop ---
 async def main():
     await bot.start()
     print("==================================================")
-    print(" ULTIMATE SUPREME VIP v13.0 LIVE ")
+    print(" ULTIMATE SUPREME FULL CONTROL ENGINE LIVE ")
     print("==================================================")
     
     for i in range(1, CONCURRENT_WORKERS + 1):
         asyncio.create_task(queue_worker(i))
 
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./](start|panel)$'))
-    async def panel_cmd(event):
-        targets_count = len(DB.get("target_channels", []))
-        status_val = DB.get("status", "ON")
-        tags_status = "" if DB.get("auto_tags") else ""
-        ads_status = "" if DB.get("clean_ads") else ""
-        
-        panel_text = (
-            " **SUPREME VIP CONTROL PANEL v13.0** \n"
-            "\n"
-            f" **Status:** `{status_val}` |  **Targets:** `{targets_count} Channels`\n"
-            f" **Threads:** `{CONCURRENT_WORKERS} Threads`\n"
-            f" **Auto Tags:** `{tags_status}` |  **Clean Ads:** `{ads_status}`\n"
-            f" **Filter:** `{DB.get('media_filter').upper()}` |  **Delay:** `{DB.get('delay_seconds')}s`\n"
-            f" **Queue Pending:** `{upload_queue.qsize()} Files`"
-        )
-        
-        buttons = [
-            [Button.inline(" Turn ON", b"engine_on"), Button.inline(" Turn OFF", b"engine_off")],
-            [Button.inline(" Dashboard Status", b"btn_status"), Button.inline(" Daily Stats", b"btn_stats")],
-            [Button.inline(" Toggle Tags", b"toggle_tags"), Button.inline(" Toggle Ads", b"toggle_ads")],
-            [Button.inline(" View Sources", b"btn_sources")]
-        ]
-        await event.respond(panel_text, buttons=buttons)
+    # --- ALL COMMANDS RESTORED ---
 
-    @bot.on(events.CallbackQuery)
-    async def callback_handler(event):
-        data = event.data.decode('utf-8')
-        if data == "engine_on":
-            DB["status"] = "ON"
-            save_db()
-            await event.answer(" Engine Activated!", alert=True)
-        elif data == "engine_off":
-            DB["status"] = "OFF"
-            save_db()
-            await event.answer(" Engine Deactivated!", alert=True)
-        elif data == "toggle_tags":
-            DB["auto_tags"] = not DB.get("auto_tags", False)
-            save_db()
-            await event.answer(f"Tags: {'ENABLED' if DB['auto_tags'] else 'DISABLED'}", alert=True)
-        elif data == "toggle_ads":
-            DB["clean_ads"] = not DB.get("clean_ads", True)
-            save_db()
-            await event.answer(f"Ad Cleaner: {'ENABLED' if DB['clean_ads'] else 'DISABLED'}", alert=True)
-        elif data == "btn_status":
-            uptime_sec = int(time.time() - start_time)
-            hours, remainder = divmod(uptime_sec, 3600)
-            minutes, seconds = divmod(remainder, 60)
-            vram = psutil.virtual_memory()
-            cpu_pct = psutil.cpu_percent(interval=0.5)
-            await event.answer(f"CPU: {cpu_pct}% | RAM: {vram.percent}% | Uptime: {hours}h {minutes}m", alert=True)
-        elif data == "btn_stats":
-            stats = DB.get("daily_stats", {})
-            total_u = sum(stats.values())
-            await event.answer(f"Total Uploaded Files Recorded: {total_u}", alert=True)
-        elif data == "btn_sources":
-            sources = DB.get("sources", [])
-            await event.answer(f"Active Sources Count: {len(sources)}", alert=True)
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./](start|help)$'))
+    async def start_cmd(event):
+        help_text = (
+            " **SUPREME FULL CONTROL COMMAND CENTER** \n"
+            "\n"
+            " **Engine Control:**\n"
+            " `/on` - Engine ကို ဖွင့်မည်\n"
+            " `/off` - Engine ကို ခေတ္တရပ်မည်\n"
+            " `/status` - Bot အခြေအနေနှင့် Queue စစ်မည်\n"
+            " `/stats` - နေ့စဉ် Upload စာရင်းကြည့်မည်\n\n"
+            " **Sources & Targets Management:**\n"
+            " `/add [link/username]` - Source ထည့်၍ အဟောင်းများပါ Cwl လုပ်မည်\n"
+            " `/del [source]` - Source ဖယ်ရှားမည်\n"
+            " `/sources` - Source စာရင်းအားလုံးကြည့်မည်\n"
+            " `/addtarget` - လက်ရှိချတ်ကို Target Channel အဖြစ် သတ်မှတ်မည်\n"
+            " `/deltarget` - လက်ရှိချတ်ကို Target မှ ဖယ်မည်\n"
+            " `/targets` - Target Channels များနှင့် Log Channel ကြည့်မည်\n\n"
+            " **Customization & Formatting:**\n"
+            " `/setheader [text]` - Header စာသားသတ်မှတ်မည်\n"
+            " `/setwatermark [text]` - Watermark စာသားသတ်မှတ်မည်\n"
+            " `/setfooter [text]` - Footer စာသားသတ်မှတ်မည်\n"
+            " `/setlink [link/@username]` - Link များကို အစားထိုးမည်\n"
+            " `/setbtn [Text] | [URL]` - Inline Button ထည့်မည်\n"
+            " `/setthumb` - ပုံကို Reply ပေး၍ Thumbnail အဖြစ် သတ်မှတ်မည်\n"
+            " `/setlog` - လက်ရှိချတ်ကို Log Channel အဖြစ် သတ်မှတ်မည်\n\n"
+            " **Filters & Security:**\n"
+            " `/autotags` - Auto Hashtags ဖွင့်/ပိတ်\n"
+            " `/cleanads` - Ad Cleaner ဖွင့်/ပိတ်\n"
+            " `/setdelay [sec]` - Upload ကြား စက္ကန့်ဆိုင်းရန်\n"
+            " `/filter [all/video/document]` - ဖိုင်အမျိုးအစား ရွေးချယ်မည်\n"
+            " `/addblack [word]` - ပိတ်ပင်မည့်စာသား ထည့်မည်\n"
+            " `/delblack [word]` - ပိတ်ပင်စာသား ဖယ်မည်\n"
+            " `/blacklist` - ပိတ်ပင်ထားသော စာသားများကြည့်မည်"
+        )
+        await event.respond(help_text)
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]ping$'))
     async def ping_cmd(event):
-        await event.respond(" **Supreme Pong!** Ultra-responsive server running smoothly.")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setthumb$'))
-    async def setthumb_cmd(event):
-        if event.is_reply:
-            reply_msg = await event.get_reply_message()
-            if reply_msg.media:
-                await bot.download_media(reply_msg, file=THUMB_PATH)
-                await event.respond(" **Supreme Custom Thumbnail successfully saved!**")
-                return
-        await event.respond(" Please reply to an image/photo with `.setthumb` to set it as custom thumbnail.")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]addtarget$'))
-    async def addtarget_cmd(event):
-        chat_id = event.chat_id
-        if chat_id not in DB["target_channels"]:
-            DB["target_channels"].append(chat_id)
-            save_db()
-            await event.respond(f" **This chat added as a Target Channel.** (Total: {len(DB['target_channels'])})")
-        else:
-            await event.respond(" This chat is already in target channels list.")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setbtn (.+) \| (.+)'))
-    async def setbtn_cmd(event):
-        btn_text = event.pattern_match.group(1).strip()
-        btn_url = event.pattern_match.group(2).strip()
-        DB["custom_button"] = {"text": btn_text, "url": btn_url}
-        save_db()
-        await event.respond(f" **Custom Inline Button updated:** [{btn_text}]({btn_url})")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setlog$'))
-    async def setlog_cmd(event):
-        DB["log_channel"] = event.chat_id
-        save_db()
-        await event.respond(f" **This chat has been set as the Supreme Log Channel.**")
+        await event.respond(" **Supreme Pong!** All systems operational.")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]on$'))
     async def on_cmd(event):
@@ -389,73 +327,11 @@ async def main():
         save_db()
         await event.respond(" **Engine Deactivated:** Live forwarding & cloning paused.")
 
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]autotags$'))
-    async def autotags_cmd(event):
-        DB["auto_tags"] = not DB.get("auto_tags", False)
-        save_db()
-        await event.respond(f" **Auto Tags:** `{'ENABLED' if DB['auto_tags'] else 'DISABLED'}`")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]cleanads$'))
-    async def cleanads_cmd(event):
-        DB["clean_ads"] = not DB.get("clean_ads", True)
-        save_db()
-        await event.respond(f" **Ad Cleaner:** `{'ENABLED' if DB['clean_ads'] else 'DISABLED'}`")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setdelay (\d+)'))
-    async def setdelay_cmd(event):
-        secs = int(event.pattern_match.group(1))
-        DB["delay_seconds"] = secs
-        save_db()
-        await event.respond(f" **Drip Delay set to {secs} seconds.**")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]filter (all|video|document)$'))
-    async def filter_cmd(event):
-        ftype = event.pattern_match.group(1).lower()
-        DB["media_filter"] = ftype
-        save_db()
-        await event.respond(f" **Media Filter updated to:** `{ftype.upper()}`")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setheader (.+)'))
-    async def setheader_cmd(event):
-        DB["header"] = event.pattern_match.group(1).strip()
-        save_db()
-        await event.respond(" **Header updated successfully!**")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setwatermark (.+)'))
-    async def setwatermark_cmd(event):
-        DB["watermark"] = event.pattern_match.group(1).strip()
-        save_db()
-        await event.respond(" **Watermark updated successfully!**")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setfooter (.+)'))
-    async def setfooter_cmd(event):
-        DB["footer"] = event.pattern_match.group(1).strip()
-        save_db()
-        await event.respond(" **Footer updated successfully!**")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setlink (.+)'))
-    async def setlink_cmd(event):
-        DB["replace_link"] = event.pattern_match.group(1).strip()
-        save_db()
-        await event.respond(" **Link Replacement updated successfully!**")
-
-    @bot.on(events.NewMessage(pattern=r'(?i)^[./]stats$'))
-    async def stats_cmd(event):
-        stats = DB.get("daily_stats", {})
-        msg = " **DAILY UPLOAD STATISTICS:**\n"
-        if not stats:
-            msg += "No uploads recorded yet."
-        else:
-            for date, count in sorted(stats.items())[-7:]:
-                msg += f" `{date}` : **{count} files**\n"
-        await event.respond(msg)
-
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]status$'))
     async def status_cmd(event):
         uptime_sec = int(time.time() - start_time)
         hours, remainder = divmod(uptime_sec, 3600)
         minutes, seconds = divmod(remainder, 60)
-
         vram = psutil.virtual_memory()
         cpu_pct = psutil.cpu_percent(interval=0.5)
 
@@ -469,7 +345,7 @@ async def main():
                 progress_text += f" `{src}`\n  `{p_bar}` **{pct}%** ({data['scanned']}/{data['total']})\n"
 
         status_msg = (
-            " **SUPREME DASHBOARD v13.0** \n"
+            " **SUPREME DASHBOARD (FULL CONTROL)** \n"
             "\n"
             f" **Threads:** `{CONCURRENT_WORKERS}` |  **Uptime:** `{hours}h {minutes}m`\n"
             f" **CPU:** `{cpu_pct}%` |  **RAM:** `{vram.percent}%`\n"
@@ -478,6 +354,17 @@ async def main():
             ""
         )
         await event.respond(status_msg)
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]stats$'))
+    async def stats_cmd(event):
+        stats = DB.get("daily_stats", {})
+        msg = " **DAILY UPLOAD STATISTICS:**\n"
+        if not stats:
+            msg += "No uploads recorded yet."
+        else:
+            for date, count in sorted(stats.items())[-7:]:
+                msg += f" `{date}` : **{count} files**\n"
+        await event.respond(msg)
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]add (.+)'))
     async def add_cmd(event):
@@ -517,6 +404,135 @@ async def main():
         for idx, src in enumerate(DB["sources"], 1):
             msg += f"{idx}. `{src}`\n"
         await event.respond(msg)
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]addtarget$'))
+    async def addtarget_cmd(event):
+        chat_id = event.chat_id
+        if chat_id not in DB["target_channels"]:
+            DB["target_channels"].append(chat_id)
+            save_db()
+            await event.respond(f" **This chat added as a Target Channel.** (Total: {len(DB['target_channels'])})")
+        else:
+            await event.respond(" This chat is already in target channels list.")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]deltarget$'))
+    async def deltarget_cmd(event):
+        chat_id = event.chat_id
+        if chat_id in DB["target_channels"]:
+            DB["target_channels"].remove(chat_id)
+            save_db()
+            await event.respond(" **This chat removed from Target Channels.**")
+        else:
+            await event.respond(" This chat is not in target channels list.")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]targets$'))
+    async def targets_cmd(event):
+        targets = DB.get("target_channels", [])
+        log_c = DB.get("log_channel", "Not Set")
+        msg = f" **TARGET CHANNELS:**\n"
+        for idx, t in enumerate(targets, 1):
+            msg += f"{idx}. `{t}`\n"
+        msg += f"\n **Log Channel:** `{log_c}`"
+        await event.respond(msg)
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setheader (.+)'))
+    async def setheader_cmd(event):
+        DB["header"] = event.pattern_match.group(1).strip()
+        save_db()
+        await event.respond(" **Header updated successfully!**")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setwatermark (.+)'))
+    async def setwatermark_cmd(event):
+        DB["watermark"] = event.pattern_match.group(1).strip()
+        save_db()
+        await event.respond(" **Watermark updated successfully!**")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setfooter (.+)'))
+    async def setfooter_cmd(event):
+        DB["footer"] = event.pattern_match.group(1).strip()
+        save_db()
+        await event.respond(" **Footer updated successfully!**")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setlink (.+)'))
+    async def setlink_cmd(event):
+        DB["replace_link"] = event.pattern_match.group(1).strip()
+        save_db()
+        await event.respond(" **Link Replacement updated successfully!**")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setbtn (.+) \| (.+)'))
+    async def setbtn_cmd(event):
+        btn_text = event.pattern_match.group(1).strip()
+        btn_url = event.pattern_match.group(2).strip()
+        DB["custom_button"] = {"text": btn_text, "url": btn_url}
+        save_db()
+        await event.respond(f" **Custom Inline Button updated:** [{btn_text}]({btn_url})")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setthumb$'))
+    async def setthumb_cmd(event):
+        if event.is_reply:
+            reply_msg = await event.get_reply_message()
+            if reply_msg.media:
+                await bot.download_media(reply_msg, file=THUMB_PATH)
+                await event.respond(" **Supreme Custom Thumbnail successfully saved!**")
+                return
+        await event.respond(" Please reply to an image/photo with `.setthumb` to set it as custom thumbnail.")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setlog$'))
+    async def setlog_cmd(event):
+        DB["log_channel"] = event.chat_id
+        save_db()
+        await event.respond(f" **This chat has been set as the Supreme Log Channel.**")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]autotags$'))
+    async def autotags_cmd(event):
+        DB["auto_tags"] = not DB.get("auto_tags", False)
+        save_db()
+        await event.respond(f" **Auto Tags:** `{'ENABLED' if DB['auto_tags'] else 'DISABLED'}`")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]cleanads$'))
+    async def cleanads_cmd(event):
+        DB["clean_ads"] = not DB.get("clean_ads", True)
+        save_db()
+        await event.respond(f" **Ad Cleaner:** `{'ENABLED' if DB['clean_ads'] else 'DISABLED'}`")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setdelay (\d+)'))
+    async def setdelay_cmd(event):
+        secs = int(event.pattern_match.group(1))
+        DB["delay_seconds"] = secs
+        save_db()
+        await event.respond(f" **Drip Delay set to {secs} seconds.**")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]filter (all|video|document)$'))
+    async def filter_cmd(event):
+        ftype = event.pattern_match.group(1).lower()
+        DB["media_filter"] = ftype
+        save_db()
+        await event.respond(f" **Media Filter updated to:** `{ftype.upper()}`")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]addblack (.+)'))
+    async def addblack_cmd(event):
+        word = event.pattern_match.group(1).strip().lower()
+        if word not in DB["blacklist_words"]:
+            DB["blacklist_words"].append(word)
+            save_db()
+            await event.respond(f" Added `{word}` to blacklist.")
+        else:
+            await event.respond(" Word already in blacklist.")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]delblack (.+)'))
+    async def delblack_cmd(event):
+        word = event.pattern_match.group(1).strip().lower()
+        if word in DB["blacklist_words"]:
+            DB["blacklist_words"].remove(word)
+            save_db()
+            await event.respond(f" Removed `{word}` from blacklist.")
+        else:
+            await event.respond(" Word not found in blacklist.")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]blacklist$'))
+    async def blacklist_cmd(event):
+        words = DB.get("blacklist_words", [])
+        await event.respond(f" **Blacklist Words:**\n`{', '.join(words)}`")
 
     @bot.on(events.NewMessage())
     async def live_forwarder(event):
