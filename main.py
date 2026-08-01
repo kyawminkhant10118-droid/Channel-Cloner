@@ -18,7 +18,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return " Ultimate Pro Engine v9.0 (Final Big Upgrade) is Live!"
+    return " Ultimate Omni-Feature VIP Engine v11.0 is Live!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -34,7 +34,7 @@ API_HASH = 'c1b7e324a99544d7a9229ff5324af362'
 SESSION_STRING = os.environ.get("SESSION_STRING")
 
 # --- 3. Engine Configuration ---
-CONCURRENT_WORKERS = 5
+CONCURRENT_WORKERS = 8
 DB_FILE = "ultimate_db.json"
 TEMP_DIR = "temp_downloads"
 THUMB_PATH = "custom_thumb.jpg"
@@ -48,20 +48,18 @@ def load_db():
             pass
     return {
         "target_channel": -1003351682369,
-        "log_channel": None,
         "sources": [],
         "duplicates": [],
-        "catalog": {},
         "daily_stats": {},
         "crawler_progress": {},
-        "header": "",
-        "watermark": " **Uploaded by Our Channel**",
+        "header": " **[VIP EXCLUSIVE CONTENT]** ",
+        "watermark": " **Powered by VIP Premium Engine**",
         "footer": "",
         "media_filter": "all",
         "replace_link": "",
         "clean_ads": True,
-        "auto_tags": False,     # V9.0 Feature
-        "delay_seconds": 0,     # V9.0 Feature
+        "auto_tags": True,
+        "delay_seconds": 0,
         "status": "ON"
     }
 
@@ -86,7 +84,7 @@ def make_progress_bar(percent):
 def generate_hashtags(text):
     text_lower = text.lower()
     keywords = ['1080p', '720p', '4k', 'action', 'horror', 'comedy', 'romance', 
-                'sci-fi', 'thriller', 'drama', 'animation', 'fantasy', 'myanmar', 'sub', 'dub']
+                'sci-fi', 'thriller', 'drama', 'animation', 'fantasy', 'myanmar', 'sub', 'dub', 'vip']
     tags = [f"#{kw.replace('-', '')}" for kw in keywords if kw in text_lower]
     return " ".join(tags)
 
@@ -114,11 +112,7 @@ def build_caption(original_text):
         caption = re.sub(r'(?i)(join|sub|channel|promo|1xbet|sponsor)', '', caption)
     
     caption = caption.strip()
-    
-    # Generate Tags if enabled
-    tags = ""
-    if DB.get("auto_tags"):
-        tags = generate_hashtags(caption)
+    tags = generate_hashtags(caption) if DB.get("auto_tags") else ""
     
     parts = []
     if DB.get("header"): parts.append(DB["header"].strip())
@@ -139,14 +133,11 @@ async def safe_upload(message, caption):
 
     thumb_to_use = THUMB_PATH if os.path.exists(THUMB_PATH) else None
 
-    # V9.0 Anti-Ban Delay System
     delay = DB.get("delay_seconds", 0)
     if delay > 0:
-        print(f"[ Delay] Waiting {delay} seconds before sending...")
         await asyncio.sleep(delay)
 
     try:
-        # SPEED MAX Cloud Transfer
         if not thumb_to_use and message.media:
             sent_msg = await bot.send_file(
                 target, message.media, caption=caption.strip(), supports_streaming=True
@@ -160,7 +151,6 @@ async def safe_upload(message, caption):
     except Exception:
         pass
 
-    # FALLBACK Chunk Buffer
     while True:
         try:
             os.makedirs(TEMP_DIR, exist_ok=True)
@@ -195,7 +185,7 @@ async def queue_worker(worker_id):
             pass
         finally:
             upload_queue.task_done()
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
 
 # ---  History Crawler Engine ---
 async def clone_old_videos(source_chat):
@@ -210,7 +200,14 @@ async def clone_old_videos(source_chat):
         async for message in bot.iter_messages(source_chat, reverse=True):
             if DB.get("status") == "OFF": break
             scanned += 1
-            if message.video or message.document:
+            
+            m_filter = DB.get("media_filter", "all")
+            match_filter = False
+            if m_filter == "all" and (message.video or message.document): match_filter = True
+            elif m_filter == "video" and message.video: match_filter = True
+            elif m_filter == "document" and message.document and not message.video: match_filter = True
+
+            if match_filter:
                 caption = build_caption(message.text)
                 await upload_queue.put((message, caption))
                 media_found += 1
@@ -246,7 +243,7 @@ async def resolve_and_join(link_or_username):
 async def main():
     await bot.start()
     print("==================================================")
-    print(" ULTIMATE PRO ENGINE v9.0 (FINAL UPGRADE) LIVE ")
+    print(" ULTIMATE OMNI-FEATURE VIP v11.0 LIVE ")
     print("==================================================")
     
     for i in range(1, CONCURRENT_WORKERS + 1):
@@ -255,43 +252,117 @@ async def main():
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]start$'))
     async def start_cmd(event):
         target_info = DB.get("target_channel", "Not Set")
-        tags_status = " ON" if DB.get("auto_tags") else " OFF"
-        delay_val = DB.get("delay_seconds", 0)
+        status_val = DB.get("status", "ON")
+        tags_status = "" if DB.get("auto_tags") else ""
+        ads_status = "" if DB.get("clean_ads") else ""
         
         menu_text = (
-            " **ULTIMATE PRO USERBOT v9.0** \n"
+            " **ULTIMATE OMNI-FEATURE BOT v11.0** \n"
             "\n"
-            f" **Target:** `{target_info}`\n"
-            f" **Auto Tags:** `{tags_status}`\n"
-            f" **Upload Delay:** `{delay_val} Secs`\n"
-            f" **Queue Pending:** `{upload_queue.qsize()} Files`\n\n"
+            f" **Engine Status:** `{status_val}`\n"
+            f" **Target Channel:** `{target_info}`\n"
+            f" **Workers:** `{CONCURRENT_WORKERS} Threads`\n"
+            f" **Auto Tags:** `{tags_status}` |  **Clean Ads:** `{ads_status}`\n"
+            f" **Media Filter:** `{DB.get('media_filter').upper()}`\n"
+            f" **Delay:** `{DB.get('delay_seconds')}s` |  **Queue:** `{upload_queue.qsize()}`\n\n"
             
-            " **FINAL COMMANDS:**\n"
-            " `.status` - Visual Dashboard\n"
-            " `.add <Link>` | `.del <Link>`\n"
+            " **ALL COMMANDS LIST:**\n"
+            " `.on` / `.off` - Engine Switch\n"
+            " `.status` - Visual Progress & Dashboard\n"
+            " `.stats` - Daily Upload Analytics\n"
+            " `.add <Link>` | `.del <Link>` | `.sources`\n"
+            " `.setheader <Text>` - Custom Header\n"
+            " `.setwatermark <Text>` - Custom Watermark\n"
+            " `.setfooter <Text>` - Custom Footer\n"
+            " `.setlink <Link>` - Replace Links/Usernames\n"
+            " `.cleanads` - Toggle Ad Cleaner\n"
             " `.autotags` - Toggle Genre Tags\n"
-            " `.setdelay <Sec>` - Drip Upload Time\n"
-            " `.sources` | `.ping`"
+            " `.setdelay <Sec>` - Drip Upload Delay\n"
+            " `.filter <all/video/document>` - Media Filter\n"
+            " `.vip` | `.ping`"
         )
         await event.respond(menu_text)
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]ping$'))
     async def ping_cmd(event):
-        await event.respond(" **Pong!** Ultimate Engine is running seamlessly.")
+        await event.respond(" **Pong!** Omni-Feature Engine is fully operational.")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]vip$'))
+    async def vip_cmd(event):
+        await event.respond(" **VIP LICENSE:** `Lifetime Unlimited Access (All Features Unlocked)`")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]on$'))
+    async def on_cmd(event):
+        DB["status"] = "ON"
+        save_db()
+        await event.respond(" **Engine Activated:** Live forwarding & cloning resumed.")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]off$'))
+    async def off_cmd(event):
+        DB["status"] = "OFF"
+        save_db()
+        await event.respond(" **Engine Deactivated:** Live forwarding & cloning paused.")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]autotags$'))
     async def autotags_cmd(event):
         DB["auto_tags"] = not DB.get("auto_tags", False)
         save_db()
-        status = " ENABLED" if DB["auto_tags"] else " DISABLED"
-        await event.respond(f" **Auto Hashtags are now {status}.**")
+        await event.respond(f" **Auto Tags:** `{'ENABLED' if DB['auto_tags'] else 'DISABLED'}`")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]cleanads$'))
+    async def cleanads_cmd(event):
+        DB["clean_ads"] = not DB.get("clean_ads", True)
+        save_db()
+        await event.respond(f" **Ad Cleaner:** `{'ENABLED' if DB['clean_ads'] else 'DISABLED'}`")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]setdelay (\d+)'))
     async def setdelay_cmd(event):
         secs = int(event.pattern_match.group(1))
         DB["delay_seconds"] = secs
         save_db()
-        await event.respond(f" **Upload Delay set to {secs} seconds per file.**")
+        await event.respond(f" **Drip Delay set to {secs} seconds.**")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]filter (all|video|document)$'))
+    async def filter_cmd(event):
+        ftype = event.pattern_match.group(1).lower()
+        DB["media_filter"] = ftype
+        save_db()
+        await event.respond(f" **Media Filter updated to:** `{ftype.upper()}`")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setheader (.+)'))
+    async def setheader_cmd(event):
+        DB["header"] = event.pattern_match.group(1).strip()
+        save_db()
+        await event.respond(" **Header updated successfully!**")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setwatermark (.+)'))
+    async def setwatermark_cmd(event):
+        DB["watermark"] = event.pattern_match.group(1).strip()
+        save_db()
+        await event.respond(" **Watermark updated successfully!**")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setfooter (.+)'))
+    async def setfooter_cmd(event):
+        DB["footer"] = event.pattern_match.group(1).strip()
+        save_db()
+        await event.respond(" **Footer updated successfully!**")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]setlink (.+)'))
+    async def setlink_cmd(event):
+        DB["replace_link"] = event.pattern_match.group(1).strip()
+        save_db()
+        await event.respond(" **Link Replacement updated successfully!**")
+
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]stats$'))
+    async def stats_cmd(event):
+        stats = DB.get("daily_stats", {})
+        msg = " **DAILY UPLOAD STATISTICS:**\n"
+        if not stats:
+            msg += "No uploads recorded yet."
+        else:
+            for date, count in sorted(stats.items())[-7:]:
+                msg += f" `{date}` : **{count} files**\n"
+        await event.respond(msg)
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]status$'))
     async def status_cmd(event):
@@ -305,20 +376,18 @@ async def main():
         progress_text = ""
         crawler_data = DB.get("crawler_progress", {})
         if crawler_data:
-            progress_text += "\n **LIVE CLONING PROGRESS:**\n"
+            progress_text += "\n **CLONING PROGRESS:**\n"
             for src, data in crawler_data.items():
                 pct = data['percent']
                 p_bar = make_progress_bar(pct)
                 progress_text += f" `{src}`\n  `{p_bar}` **{pct}%** ({data['scanned']}/{data['total']})\n"
 
         status_msg = (
-            " **ULTIMATE DASHBOARD v9.0** \n"
+            " **OMNI-FEATURE DASHBOARD v11.0** \n"
             "\n"
-            f" **Active Threads:** `{CONCURRENT_WORKERS}`\n"
-            f" **Upload Delay:** `{DB.get('delay_seconds')}s`\n"
-            f" **Pending Queue:** `{upload_queue.qsize()} Videos`\n"
+            f" **Threads:** `{CONCURRENT_WORKERS}` |  **Uptime:** `{hours}h {minutes}m`\n"
             f" **CPU:** `{cpu_pct}%` |  **RAM:** `{vram.percent}%`\n"
-            f" **Uptime:** `{hours}h {minutes}m`\n"
+            f" **Queue Pending:** `{upload_queue.qsize()} Files`\n"
             f"{progress_text}"
             ""
         )
@@ -375,9 +444,16 @@ async def main():
                 elif chat and str(chat.id) == src:
                     is_in_list = True
 
-            if is_in_list and (event.message.video or event.message.document):
-                caption = build_caption(event.message.text)
-                await upload_queue.put((event.message, caption))
+            if is_in_list:
+                m_filter = DB.get("media_filter", "all")
+                match_filter = False
+                if m_filter == "all" and (event.message.video or event.message.document): match_filter = True
+                elif m_filter == "video" and event.message.video: match_filter = True
+                elif m_filter == "document" and event.message.document and not event.message.video: match_filter = True
+
+                if match_filter:
+                    caption = build_caption(event.message.text)
+                    await upload_queue.put((event.message, caption))
         except Exception:
             pass
 
