@@ -27,15 +27,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def _parse_int(val, default=0):
+    """Parse int from env, strip spaces and handle errors."""
+    try:
+        return int(str(val).strip().replace(" ", ""))
+    except (ValueError, TypeError):
+        return default
+
 # ==========================================
 # 🔧 ENVIRONMENT VARIABLES
 # ==========================================
-API_ID = int(os.environ.get("API_ID", 0))
-API_HASH = os.environ.get("API_HASH", "")
-SESSION_STRING = os.environ.get("SESSION_STRING", "")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-OWNER_ID = int(os.environ.get("OWNER_ID", 0))
-LOG_CHANNEL = os.environ.get("LOG_CHANNEL", "")  # Optional: log channel ID
+API_ID = _parse_int(os.environ.get("API_ID"))
+API_HASH = os.environ.get("API_HASH", "").strip()
+SESSION_STRING = os.environ.get("SESSION_STRING", "").strip()
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+OWNER_ID = _parse_int(os.environ.get("OWNER_ID") or os.environ.get("OWNER"))
+LOG_CHANNEL = os.environ.get("LOG_CHANNEL", "").strip()
 
 # ==========================================
 # 📦 GLOBAL STATE
