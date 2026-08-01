@@ -16,6 +16,9 @@ from pyrogram.errors import (
 )
 from datetime import datetime
 
+# Web dashboard
+from web_server import start_web_server
+
 # ==========================================
 # ⚙️ LOGGING
 # ==========================================
@@ -965,6 +968,10 @@ async def main():
 
     logger.info(f"OWNER_ID = {OWNER_ID}")
     logger.info("Bot is now listening for messages...")
+
+    # Start web dashboard in background
+    asyncio.create_task(start_web_server())
+    logger.info(f"Web dashboard starting on port {int(os.environ.get('PORT', 8080))}")
 
     await idle()
 
