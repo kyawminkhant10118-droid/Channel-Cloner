@@ -8,7 +8,7 @@ from pyrogram import Client, filters, idle
 from pyrogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
     InputMediaPhoto, InputMediaVideo, InputMediaAudio, InputMediaDocument,
-    BotCommand, BotCommandScopeAllPrivateChats
+    BotCommand
 )
 from pyrogram.errors import (
     FloodWait, ChatForwardsRestricted, ChatAdminRequired,
@@ -323,19 +323,29 @@ def is_owner(func):
 # ==========================================
 # 🤖 BOT COMMANDS
 # ==========================================
-@bot.on_message(filters.command("start") & filters.private & ~filters.user(OWNER_ID))
-async def start_public(client, message):
-    await message.reply_text(
-        "\u26a0\ufe0f **Access Denied**\n\n"
-        "This is a private bot. Only the owner can use it."
-    )
-
-
 @bot.on_message(filters.command(["start", "menu"]) & filters.user(OWNER_ID))
 async def start_cmd(client, message):
+    try:
+        await message.reply_text(
+            await get_status_text(),
+            reply_markup=await get_main_menu()
+        )
+    except Exception as e:
+        logger.error(f"start_cmd error: {e}", exc_info=True)
+        try:
+            await message.reply_text(f"Error: {e}")
+        except Exception:
+            pass
+
+
+@bot.on_message(filters.command("start") & filters.private)
+async def start_public(client, message):
+    """Catch-all /start for non-owners"""
+    if message.from_user and message.from_user.id == OWNER_ID:
+        return  # Owner handler already ran
     await message.reply_text(
-        await get_status_text(),
-        reply_markup=await get_main_menu()
+        "\u26a0\ufe0f **Access Denied**\n\n"
+        "This is a private bot."
     )
 
 
@@ -901,10 +911,7 @@ async def main():
             BotCommand("setdelay", "Set clone delay"),
             BotCommand("status", "View bot status"),
         ]
-        await bot.set_bot_commands(
-            commands,
-            scope=BotCommandScopeAllPrivateChats()
-        )
+        await bot.set_bot_commands(commands)
         logger.info("Bot command menu set")
     except Exception as e:
         logger.warning(f"Could not set bot commands: {e}")
@@ -931,6 +938,7 @@ async def main():
             logger.warning(f"Channel cache warning: {e}")
 
     logger.info(f"Cloner engine started with {len(routes)} route(s)")
+    logger.info(f"OWNER_ID = {OWNER_ID}")
     await idle()
 
     await userbot.stop()
