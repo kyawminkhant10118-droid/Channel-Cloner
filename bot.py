@@ -14,7 +14,6 @@ from pyrogram.errors import (
     FloodWait, ChatForwardsRestricted, ChatAdminRequired,
     ChannelPrivate, PeerIdInvalid, UserBannedInChannel
 )
-from pyrogram.raw.functions.messages import ForwardMessages
 from datetime import datetime
 
 # ==========================================
@@ -891,6 +890,8 @@ async def cloner_engine(client, message):
 # \U0001f680 MAIN RUNNER
 # ==========================================
 async def main():
+    logger.info(f"Starting bot... OWNER_ID={OWNER_ID}, API_ID={API_ID}")
+
     if not API_ID or not API_HASH:
         logger.error("API_ID and API_HASH are required!")
         return
@@ -905,13 +906,24 @@ async def main():
         return
 
     await init_db()
+    logger.info("Database ready")
 
-    await userbot.start()
-    logger.info("Userbot connected")
+    # Start userbot
+    try:
+        await userbot.start()
+        logger.info("Userbot connected")
+    except Exception as e:
+        logger.error(f"Userbot failed to start: {e}")
+        return
 
-    await bot.start()
-    me = await bot.get_me()
-    logger.info(f"Bot @{me.username} connected")
+    # Start bot
+    try:
+        await bot.start()
+        me = await bot.get_me()
+        logger.info(f"Bot @{me.username} connected")
+    except Exception as e:
+        logger.error(f"Bot failed to start: {e}")
+        return
 
     # Set BotCommand menu
     try:
@@ -925,6 +937,7 @@ async def main():
             BotCommand("set_footer", "Set footer text"),
             BotCommand("setdelay", "Set clone delay"),
             BotCommand("status", "View bot status"),
+            BotCommand("debug", "Debug info"),
         ]
         await bot.set_bot_commands(commands)
         logger.info("Bot command menu set")
@@ -941,19 +954,9 @@ async def main():
     except Exception as e:
         logger.warning(f"Could not notify owner: {e}")
 
-    # Pre-cache channel info
-    routes = await get_routes()
-    for route in routes:
-        src_id = route[0]
-        dst_id = route[2]
-        try:
-            await userbot.get_chat(src_id)
-            await userbot.get_chat(dst_id)
-        except Exception as e:
-            logger.warning(f"Channel cache warning: {e}")
-
-    logger.info(f"Cloner engine started with {len(routes)} route(s)")
     logger.info(f"OWNER_ID = {OWNER_ID}")
+    logger.info("Bot is now listening for messages...")
+
     await idle()
 
     await userbot.stop()
@@ -962,4 +965,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        logger.critical(f"Fatal error: {e}", exc_info=True)
