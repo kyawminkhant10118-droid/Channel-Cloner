@@ -47,7 +47,7 @@ def load_db():
         except Exception:
             pass
     return {
-        "target_channels": [-1003351682369],  # Support multiple targets now
+        "target_channels": [-1003351682369],  # Support multiple targets
         "log_channel": None,
         "sources": [],
         "duplicates": [],
@@ -158,7 +158,6 @@ async def safe_upload(message, caption):
     if delay > 0:
         await asyncio.sleep(delay)
 
-    # Prepare custom inline buttons if configured
     buttons = None
     c_btn = DB.get("custom_button")
     if c_btn and c_btn.get("text") and c_btn.get("url"):
@@ -548,4 +547,4 @@ async def main():
 
 if __name__ == '__main__':
     Thread(target=run_web).start()
-    asyncio.main(main())
+    asyncio.run(main())
