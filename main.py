@@ -8,6 +8,15 @@ import traceback
 import asyncio
 from telethon import TelegramClient, events, errors
 from telethon.sessions import StringSession
+from telethon.tl.types import DocumentAttributeVideo
+
+# Hachoir Metadata Parser
+try:
+    from hachoir.metadata import extractMetadata
+    from hachoir.parser import createParser
+    HACHOIR_AVAILABLE = True
+except ImportError:
+    HACHOIR_AVAILABLE = False
 
 # --- 1. LOGGING & CONFIGURATION ---
 LOG_FILE_NAME = "premium_bot.log"
@@ -128,7 +137,7 @@ async def dispatch_log(log_msg, level="INFO"):
         except Exception as e:
             logging.error(f"Failed to dispatch log: {e}")
 
-# --- 3. CORE MEDIA PROCESSOR ---
+# --- 3. CORE MEDIA PROCESSOR WITH STRICT VIDEO PLAYER ATTRIBUTES ---
 async def process_media_message(msg, status_msg):
     target = db.get("target_channel")
     if not target:
@@ -155,27 +164,65 @@ async def process_media_message(msg, status_msg):
         )
 
         file_actual_name = os.path.basename(downloaded_path)
-
-        # Upload Phase
         ul_tracker = ProgressTracker("Uploading", status_msg, file_actual_name)
+
         file_lower_ext = downloaded_path.lower()
-        is_video_ext = file_lower_ext.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.flv'))
+        is_video_ext = file_lower_ext.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.flv')) or msg.video
 
         if is_video_ext:
+            # ဗီဒီယို Metadata (Duration, Width, Height) ရယူခြင်း
+            duration = 0
+            w = 1280
+            h = 720
+
+            # ၁။ Original Post မှ Attribute ပါသလား စစ်ဆေးခြင်း
+            if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
+                for attr in msg.media.document.attributes:
+                    if isinstance(attr, DocumentAttributeVideo):
+                        duration = attr.duration or 0
+                        w = attr.w or 1280
+                        h = attr.h or 720
+                        break
+
+            # ၂။ Hachoir ဖြင့် ဖိုင်ထဲမှ Metadata ကို ထပ်မံ ဖတ်ယူခြင်း
+            if (duration == 0 or w == 0) and HACHOIR_AVAILABLE and downloaded_path:
+                try:
+                    parser = createParser(downloaded_path)
+                    if parser:
+                        with parser:
+                            metadata = extractMetadata(parser)
+                            if metadata:
+                                if metadata.has('duration'):
+                                    duration = int(metadata.get('duration').seconds)
+                                if metadata.has('width'):
+                                    w = int(metadata.get('width'))
+                                if metadata.has('height'):
+                                    h = int(metadata.get('height'))
+                except Exception as ex:
+                    logging.warning(f"Hachoir extraction warning: {ex}")
+
+            # Telegram ကို Video Player အဖြစ် မဖြစ်မနေ ပြသခိုင်းသည့် Attribute ရေးသားခြင်း
+            video_attribute = DocumentAttributeVideo(
+                duration=duration,
+                w=w,
+                h=h,
+                supports_streaming=True
+            )
+
             await bot.send_file(
                 target,
                 downloaded_path,
                 caption=caption_text,
-                supports_streaming=True,
-                force_document=False,
+                attributes=[video_attribute], # FORCE VIDEO PLAYER METADATA
+                force_document=False,         # DOCUMENT မဟုတ်ကြောင်း အတည်ပြုခြင်း
                 progress_callback=ul_tracker.callback
             )
         else:
+            # ဗီဒီယို မဟုတ်သော အခြား ဖိုင်များ (ZIP, PDF စသည်)
             await bot.send_file(
                 target,
                 downloaded_path,
                 caption=caption_text,
-                supports_streaming=True,
                 progress_callback=ul_tracker.callback
             )
 
@@ -187,10 +234,10 @@ async def process_media_message(msg, status_msg):
             "\n"
             f" **File:** `{file_actual_name}`\n"
             f" **Target:** `{target}`\n"
-            f" **Status:** Uploaded in Video Player Mode"
+            f" **Status:** Force Streamable Video Player Mode"
         )
         await status_msg.edit(finish_text)
-        await dispatch_log(f" **UPLOAD SUCCESS:** `{file_actual_name}`", "INFO")
+        await dispatch_log(f" **UPLOAD SUCCESS (VIDEO PLAYER):** `{file_actual_name}`", "INFO")
 
         await asyncio.sleep(3)
         await status_msg.delete()
@@ -232,17 +279,16 @@ async def main():
             f" Total Processed: `{db.get('total_processed_files', 0)}` files\n"
             f" System Uptime: `{hrs}h {mins}m {secs}s`\n\n"
             "**Control Commands:**\n"
-            " `/status` - စနစ်၏ လက်ရှိ အခြေအနေ အသေးစိတ် ကြည့်ရန်\n"
+            " `/status` - စနစ်၏ လက်ရှိ အခြေအနေ ကြည့်ရန်\n"
             " `/settarget <ID>` - Set Target Channel\n"
             " `/setlog <ID>` - Set System Log Channel\n"
-            " `/addsource <ID/Link>` - Add Source & Auto Fetch (အဟောင်းမှ အသစ်သို့)\n"
+            " `/addsource <ID/Link>` - Add Source & Auto Fetch\n"
             " `/delsource <ID/Link>` - Remove Source Monitor\n"
             " `/sources` - View Active Sources\n"
             " `/toggle` - Pause / Resume Engine"
         )
         await event.respond(panel_text)
 
-    # --- STATUS COMMAND ---
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]status$'))
     async def status_command(event):
         total, used, free = shutil.disk_usage(".")
@@ -285,7 +331,6 @@ async def main():
         await event.respond(f" **Log Channel Updated:** `{log_id}`")
         await dispatch_log("Log Channel linked successfully.", "INFO")
 
-    # --- SOURCE ထည့်သည်နှင့် အဟောင်းမှ အသစ်သို့ အစဉ်လိုက် တင်ပေးမည့် ADDSOURCE HANDLER ---
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]addsource (.+)'))
     async def add_source(event):
         src_raw = event.pattern_match.group(1).strip()
@@ -302,11 +347,9 @@ async def main():
             await event.respond(f" **Source Added Successfully:** `{src_str}`")
             await dispatch_log(f"Source Added: `{src_str}`", "INFO")
 
-            #  အဟောင်းမှ အသစ်သို့ (reverse=True) စနစ်ဖြင့် ရှာဖွေရယူခြင်း
             status_msg = await event.respond(" **Source ၏ ဖိုင်အဟောင်းများကို စတင် စစ်ဆေးနေပါပြီ...**")
             
             try:
-                # reverse=True ကြောင့် Message ID အဟောင်းများမှ စတင်ယူပါမည်
                 fetched_count = 0
                 async for msg in bot.iter_messages(entity if 'entity' in locals() else src_str, limit=20, reverse=True):
                     if msg and (msg.video or msg.document):
@@ -353,7 +396,6 @@ async def main():
         state = "ONLINE " if db["system_active"] else "PAUSED "
         await event.respond(f" **Engine State:** `{state}`")
 
-    # --- REAL-TIME NEW MESSAGE INTERCEPTOR ---
     @bot.on(events.NewMessage())
     async def message_interceptor(event):
         if not db.get("system_active", True):
