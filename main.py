@@ -43,7 +43,10 @@ def load_database():
             with open(DB_FILE, "r", encoding="utf-8") as f:
                 content = f.read()
                 if content.strip():
-                    return json.loads(content)
+                    data = json.loads(content)
+                    if "processed_ids" not in data:
+                        data["processed_ids"] = []
+                    return data
         except Exception as e:
             logging.error(f"Database Load Error: {e}\n{traceback.format_exc()}")
     return {
@@ -51,7 +54,8 @@ def load_database():
         "log_channel": None,
         "sources": [],
         "system_active": True,
-        "total_processed_files": 0
+        "total_processed_files": 0,
+        "processed_ids": [] # တင်ပြီးသား ဗီဒီယို ID များ မှတ်ရန်
     }
 
 def save_database(data):
@@ -73,7 +77,18 @@ bot = TelegramClient(
     request_retries=10
 )
 
-# --- 2. PROGRESS & FORMATTING HELPERS ---
+# --- 2. UNIQUE MEDIA KEY GENERATOR (DUPLICATE CHECK) ---
+def get_media_key(msg):
+    """ဗီဒီယို/ဖိုင်တစ်ခုစီ၏ သီးသန့် ID ကို ထုတ်ပေးသည့် Function"""
+    if not msg or not (msg.video or msg.document):
+        return None
+    if hasattr(msg, 'media') and hasattr(msg.media, 'document') and msg.media.document:
+        return f"doc_{msg.media.document.id}"
+    elif msg.file:
+        return f"file_{msg.file.size}_{msg.file.name}"
+    return f"msg_{msg.chat_id}_{msg.id}"
+
+# --- 3. PROGRESS & FORMATTING HELPERS ---
 def human_readable_size(size_in_bytes):
     if size_in_bytes == 0:
         return "0 B"
@@ -137,7 +152,7 @@ async def dispatch_log(log_msg, level="INFO"):
         except Exception as e:
             logging.error(f"Failed to dispatch log: {e}")
 
-# --- 3. CORE MEDIA PROCESSOR WITH STRICT VIDEO PLAYER ATTRIBUTES ---
+# --- 4. CORE MEDIA PROCESSOR WITH DUPLICATE RECORDING ---
 async def process_media_message(msg, status_msg):
     target = db.get("target_channel")
     if not target:
@@ -154,6 +169,7 @@ async def process_media_message(msg, status_msg):
         file_name = f"Video_{msg.id}.mp4"
 
     caption_text = msg.text or ""
+    media_key = get_media_key(msg)
 
     try:
         # Download Phase
@@ -170,12 +186,10 @@ async def process_media_message(msg, status_msg):
         is_video_ext = file_lower_ext.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.flv')) or msg.video
 
         if is_video_ext:
-            # ဗီဒီယို Metadata (Duration, Width, Height) ရယူခြင်း
             duration = 0
             w = 1280
             h = 720
 
-            # ၁။ Original Post မှ Attribute ပါသလား စစ်ဆေးခြင်း
             if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
                 for attr in msg.media.document.attributes:
                     if isinstance(attr, DocumentAttributeVideo):
@@ -184,7 +198,6 @@ async def process_media_message(msg, status_msg):
                         h = attr.h or 720
                         break
 
-            # ၂။ Hachoir ဖြင့် ဖိုင်ထဲမှ Metadata ကို ထပ်မံ ဖတ်ယူခြင်း
             if (duration == 0 or w == 0) and HACHOIR_AVAILABLE and downloaded_path:
                 try:
                     parser = createParser(downloaded_path)
@@ -201,7 +214,6 @@ async def process_media_message(msg, status_msg):
                 except Exception as ex:
                     logging.warning(f"Hachoir extraction warning: {ex}")
 
-            # Telegram ကို Video Player အဖြစ် မဖြစ်မနေ ပြသခိုင်းသည့် Attribute ရေးသားခြင်း
             video_attribute = DocumentAttributeVideo(
                 duration=duration,
                 w=w,
@@ -213,12 +225,11 @@ async def process_media_message(msg, status_msg):
                 target,
                 downloaded_path,
                 caption=caption_text,
-                attributes=[video_attribute], # FORCE VIDEO PLAYER METADATA
-                force_document=False,         # DOCUMENT မဟုတ်ကြောင်း အတည်ပြုခြင်း
+                attributes=[video_attribute],
+                force_document=False,
                 progress_callback=ul_tracker.callback
             )
         else:
-            # ဗီဒီယို မဟုတ်သော အခြား ဖိုင်များ (ZIP, PDF စသည်)
             await bot.send_file(
                 target,
                 downloaded_path,
@@ -226,7 +237,10 @@ async def process_media_message(msg, status_msg):
                 progress_callback=ul_tracker.callback
             )
 
+        # DB တွင် ဖိုင် တင်ပြီးကြောင်း မှတ်သားခြင်း
         db["total_processed_files"] = db.get("total_processed_files", 0) + 1
+        if media_key and media_key not in db.get("processed_ids", []):
+            db["processed_ids"].append(media_key)
         save_database(db)
 
         finish_text = (
@@ -237,9 +251,9 @@ async def process_media_message(msg, status_msg):
             f" **Status:** Force Streamable Video Player Mode"
         )
         await status_msg.edit(finish_text)
-        await dispatch_log(f" **UPLOAD SUCCESS (VIDEO PLAYER):** `{file_actual_name}`", "INFO")
+        await dispatch_log(f" **UPLOAD SUCCESS:** `{file_actual_name}`", "INFO")
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
         await status_msg.delete()
         return True
 
@@ -258,7 +272,7 @@ async def process_media_message(msg, status_msg):
             except Exception as c_err:
                 logging.warning(f"Failed cache clear: {c_err}")
 
-# --- 4. MAIN BOT COMMANDS & HANDLERS ---
+# --- 5. MAIN BOT COMMANDS & HANDLERS ---
 async def main():
     await bot.start()
     logging.info(" ULTIMATE HIGH-SPEED OMEGA ENGINE FULLY ONLINE ")
@@ -282,7 +296,7 @@ async def main():
             " `/status` - စနစ်၏ လက်ရှိ အခြေအနေ ကြည့်ရန်\n"
             " `/settarget <ID>` - Set Target Channel\n"
             " `/setlog <ID>` - Set System Log Channel\n"
-            " `/addsource <ID/Link>` - Add Source & Auto Fetch\n"
+            " `/addsource <ID/Link>` - Add Source & Auto Fetch All Past Videos\n"
             " `/delsource <ID/Link>` - Remove Source Monitor\n"
             " `/sources` - View Active Sources\n"
             " `/toggle` - Pause / Resume Engine"
@@ -331,6 +345,7 @@ async def main():
         await event.respond(f" **Log Channel Updated:** `{log_id}`")
         await dispatch_log("Log Channel linked successfully.", "INFO")
 
+    # --- SOURCE ထည့်သည်နှင့် အဟောင်းမှ အသစ်သို့ ALL FETCH + DUPLICATE SKIP HANDLER ---
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]addsource (.+)'))
     async def add_source(event):
         src_raw = event.pattern_match.group(1).strip()
@@ -347,20 +362,34 @@ async def main():
             await event.respond(f" **Source Added Successfully:** `{src_str}`")
             await dispatch_log(f"Source Added: `{src_str}`", "INFO")
 
-            status_msg = await event.respond(" **Source ၏ ဖိုင်အဟောင်းများကို စတင် စစ်ဆေးနေပါပြီ...**")
+            status_msg = await event.respond(" **Source ၏ ဖိုင်အဟောင်းအားလုံးကို စတင် စစ်ဆေးနေပါပြီ...**")
             
             try:
                 fetched_count = 0
-                async for msg in bot.iter_messages(entity if 'entity' in locals() else src_str, limit=20, reverse=True):
+                skipped_count = 0
+                
+                # limit=None ဖြင့် အရင် ဗီဒီယို အကုန်လုံးကို အဟောင်းမှ အသစ်သို့ စစ်မည်
+                async for msg in bot.iter_messages(entity if 'entity' in locals() else src_str, limit=None, reverse=True):
                     if msg and (msg.video or msg.document):
-                        fetched_count += 1
-                        info_msg = await event.respond(f" **[ဖိုင်အမှတ် {fetched_count}] ဖိုင်အဟောင်း (ID: `{msg.id}`) ကို စတင် ဒေါင်းလုဒ်လုပ်နေပါပြီ...**")
-                        await process_media_message(msg, info_msg)
+                        media_key = get_media_key(msg)
+                        
+                        # Target ထဲ တင်ပြီးသား ဖိုင်ဖြစ်နေပါက မလိုအပ်ဘဲ ထပ်မဒေါင်းဘဲ ကျော်မည်
+                        if media_key and media_key in db.get("processed_ids", []):
+                            skipped_count += 1
+                            continue
 
-                if fetched_count == 0:
-                    await status_msg.edit(" **Source ထဲတွင် လောလောဆယ် ဗီဒီယို/ဖိုင် မတွေ့ရှိသေးပါ။ Post အသစ်တက်လာပါက အလိုအလျောက် ပို့ပေးပါမည်။**")
-                else:
-                    await status_msg.edit(f" **Source မှ ရှိပြီးသား ဖိုင်အဟောင်း စုစုပေါင်း (`{fetched_count}`) ခုကို အစဉ်လိုက် တင်ပေးပြီးပါပြီ!**")
+                        fetched_count += 1
+                        info_msg = await event.respond(f" **[ဖိုင်အမှတ် {fetched_count}] ဖိုင်အဟောင်း (ID: `{msg.id}`) ကို စတင် တင်နေပါပြီ...**")
+                        await process_media_message(msg, info_msg)
+                        await asyncio.sleep(1) # Telegram Rate Limit ကာကွယ်ရန်
+
+                summary_text = (
+                    " **SOURCE FETCHING COMPLETED**\n"
+                    "\n"
+                    f" **တင်ပြီးခဲ့သော ဗီဒီယိုသစ်:** `{fetched_count}` ခု\n"
+                    f" **ရှိပြီးသားမို့ ကျော်ခဲ့သော ဗီဒီယို:** `{skipped_count}` ခု"
+                )
+                await status_msg.edit(summary_text)
 
             except Exception as e:
                 await status_msg.edit(f" Source ထည့်ပြီးသော်လည်း ဖိုင်အဟောင်းများ ယူရာတွင် Error တက်ခဲ့ပါသည်: `{e}`")
@@ -396,6 +425,7 @@ async def main():
         state = "ONLINE " if db["system_active"] else "PAUSED "
         await event.respond(f" **Engine State:** `{state}`")
 
+    # --- REAL-TIME NEW MESSAGE INTERCEPTOR ---
     @bot.on(events.NewMessage())
     async def message_interceptor(event):
         if not db.get("system_active", True):
@@ -421,6 +451,10 @@ async def main():
             )
 
             if is_matched and (event.video or event.document):
+                media_key = get_media_key(event.message)
+                if media_key and media_key in db.get("processed_ids", []):
+                    return # တင်ပြီးသားဖြစ်ပါက ကျော်မည်
+
                 status_msg = await event.respond(" **Real-time Media Detected...**")
                 await process_media_message(event.message, status_msg)
 
