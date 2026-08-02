@@ -1,5 +1,3 @@
-Telethon
+telethon
 cryptg
-h2
-Flask
-psutil
+pillow
