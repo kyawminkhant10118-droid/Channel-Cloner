@@ -1,4 +1,4 @@
-import os
+script_content = '''import os
 import json
 import time
 import math
@@ -57,7 +57,7 @@ def load_database():
                         data["processed_ids"] = []
                     return data
         except Exception as e:
-            logging.error(f"Database Load Error: {e}\n{traceback.format_exc()}")
+            logging.error(f"Database Load Error: {e}\\n{traceback.format_exc()}")
     return {
         "target_channel": None,
         "log_channel": None,
@@ -142,12 +142,12 @@ class ProgressTracker:
         progress_bar = "█" * filled_blocks + "░" * (10 - filled_blocks)
 
         status_text = (
-            f"⚡ **{self.action_name.upper()} IN PROGRESS**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📁 **File:** `{self.file_name}`\n"
-            f"📊 **Progress:** `[{progress_bar}] {percentage:.1f}%`\n"
-            f"🚀 **Speed:** `{human_readable_size(speed)}/s`\n"
-            f"📦 **Size:** `{human_readable_size(current)} / {human_readable_size(total)}`\n"
+            f"⚡ **{self.action_name.upper()} IN PROGRESS**\\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n"
+            f"📁 **File:** `{self.file_name}`\\n"
+            f"📊 **Progress:** `[{progress_bar}] {percentage:.1f}%`\\n"
+            f"🚀 **Speed:** `{human_readable_size(speed)}/s`\\n"
+            f"📦 **Size:** `{human_readable_size(current)} / {human_readable_size(total)}`\\n"
             f"⏱ **ETA:** `{human_readable_time(eta)}`"
         )
 
@@ -161,7 +161,7 @@ async def dispatch_log(log_msg, level="INFO"):
     if log_chat_id:
         try:
             icon = "🟢" if level == "INFO" else "❌" if level == "ERROR" else "⚠️"
-            await bot.send_message(log_chat_id, f"{icon} **SYSTEM LOG [{level}]**\n{log_msg}")
+            await bot.send_message(log_chat_id, f"{icon} **SYSTEM LOG [{level}]**\\n{log_msg}")
         except Exception as e:
             logging.error(f"Failed to dispatch log: {e}")
 
@@ -172,7 +172,7 @@ async def process_album_group(grouped_id):
         return
     ALBUM_LOCKS.add(grouped_id)
 
-    # 2.5 seconds delay allows Telegram to deliver all album media parts
+    # Short delay allows Telegram to deliver all album media parts
     await asyncio.sleep(2.5)
 
     messages = ALBUM_BUFFERS.pop(grouped_id, [])
@@ -222,7 +222,6 @@ async def process_album_group(grouped_id):
 
     except Exception as e:
         logging.error(f"Album direct send failed ({e}). Fallback to downloading album...")
-        # Fallback for restricted channels
         os.makedirs(TEMP_DIR, exist_ok=True)
         downloaded_files = []
         try:
@@ -395,7 +394,7 @@ async def process_media_message(msg, status_msg=None):
 
     except Exception as inner_err:
         err_trace = traceback.format_exc()
-        logging.error(f"Media Task Error: {inner_err}\n{err_trace}")
+        logging.error(f"Media Task Error: {inner_err}\\n{err_trace}")
         if status_msg:
             await status_msg.edit(f"❌ **Task Failed:** `{str(inner_err)}`")
         return False
@@ -408,10 +407,76 @@ async def process_media_message(msg, status_msg=None):
                 except Exception:
                     pass
 
-# --- 5. COMMAND HANDLERS ---
+# --- 5. AUTOMATIC SOURCE HISTORY SYNC ---
+async def sync_source_history(entity, status_msg):
+    """Source Channel သစ်ထည့်လိုက်သည်နှင့် အတိတ်က Post များအားလုံးကို အစဉ်လိုက် AUTO COPY တင်ပေးမည့် Function"""
+    target = db.get("target_channel")
+    if not target:
+        if status_msg:
+            await status_msg.edit("⚠️ Target Channel မသတ်မှတ်ရသေးပါသဖြင့် Auto Copy မလုပ်ဆောင်နိုင်ပါ။ `/settarget` ဖြင့် အရင် သတ်မှတ်ပေးပါ။")
+        return
+
+    total_copied = 0
+    skipped = 0
+
+    current_album_gid = None
+    current_album_msgs = []
+
+    async def flush_album():
+        nonlocal total_copied
+        if current_album_msgs:
+            gid = current_album_msgs[0].grouped_id
+            ALBUM_BUFFERS[gid] = current_album_msgs.copy()
+            await process_album_group(gid)
+            total_copied += len(current_album_msgs)
+            current_album_msgs.clear()
+
+    try:
+        # Fetch existing messages from oldest to newest
+        async for msg in bot.iter_messages(entity, reverse=True):
+            if not (msg.video or msg.photo or msg.document):
+                continue
+
+            media_key = get_media_key(msg)
+            if media_key and media_key in db.get("processed_ids", []):
+                skipped += 1
+                continue
+
+            if msg.grouped_id:
+                if current_album_gid == msg.grouped_id:
+                    current_album_msgs.append(msg)
+                else:
+                    await flush_album()
+                    current_album_gid = msg.grouped_id
+                    current_album_msgs.append(msg)
+            else:
+                await flush_album()
+                current_album_gid = None
+                res = await process_media_message(msg)
+                if res:
+                    total_copied += 1
+                await asyncio.sleep(0.8) # Avoid rate limits
+
+        await flush_album()
+
+        if status_msg:
+            await status_msg.edit(
+                f"✅ **SOURCE HISTORY AUTO COPY COMPLETED!**\\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n"
+                f"🎯 Total Items Copied: `{total_copied}`\\n"
+                f"⏩ Total Items Skipped: `{skipped}`"
+            )
+
+    except Exception as e:
+        err_msg = f"Sync History Failed: {e}"
+        logging.error(f"{err_msg}\\n{traceback.format_exc()}")
+        if status_msg:
+            await status_msg.edit(f"❌ **Auto Copy Error:** `{e}`")
+
+# --- 6. COMMAND HANDLERS ---
 async def main():
     await bot.start()
-    logging.info("⚡ EXACT COPY BOT ENGINE ONLINE (ALBUMS, PHOTOS, VIDEOS & DOCS) ⚡")
+    logging.info("⚡ EXACT COPY BOT ENGINE ONLINE (AUTO SYNC ON ADD SOURCE SUPPORTED) ⚡")
 
     def auth_check(func):
         async def wrapper(event):
@@ -429,23 +494,23 @@ async def main():
         mins, secs = divmod(rem, 60)
 
         panel_text = (
-            "💎 **EXACT COPY BOT DASHBOARD**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 Target Channel: `{db.get('target_channel') or 'Not Configured'}`\n"
-            f"🛡 Log Channel: `{db.get('log_channel') or 'Not Configured'}`\n"
-            f"📡 Active Sources: `{len(db.get('sources', []))}` active\n"
-            f"⚙️ Engine Status: `{'ONLINE 🟢' if db.get('system_active') else 'PAUSED 🔴'}`\n"
-            f"📦 Total Processed: `{db.get('total_processed_files', 0)}` items\n"
-            f"⏱ System Uptime: `{hrs}h {mins}m {secs}s`\n\n"
-            "**Control Commands:**\n"
-            "• `/settarget <ID>` - Target Channel သတ်မှတ်ရန်\n"
-            "• `/setlog <ID>` - Log Channel သတ်မှတ်ရန်\n"
-            "• `/addsource <ID>` - Source ထည့်ရန်\n"
-            "• `/delsource <ID>` - Source ဖျက်ရန်\n"
-            "• `/sources` - Active Sources ကြည့်ရန်\n"
-            "• `/range <Source> <Start_ID> <End_ID>` - ID အလိုက် အစုလိုက် ကူးရန်\n"
-            "• `/backup` - Database backup ကို Log Channel သို့ ပို့ရန်\n"
-            "• `/toggle` - Bot စနစ် ဖွင့်/ပိတ် ပြုလုပ်ရန်\n"
+            "💎 **EXACT COPY BOT DASHBOARD**\\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n"
+            f"🎯 Target Channel: `{db.get('target_channel') or 'Not Configured'}`\\n"
+            f"🛡 Log Channel: `{db.get('log_channel') or 'Not Configured'}`\\n"
+            f"📡 Active Sources: `{len(db.get('sources', []))}` active\\n"
+            f"⚙️ Engine Status: `{'ONLINE 🟢' if db.get('system_active') else 'PAUSED 🔴'}`\\n"
+            f"📦 Total Processed: `{db.get('total_processed_files', 0)}` items\\n"
+            f"⏱ System Uptime: `{hrs}h {mins}m {secs}s`\\n\\n"
+            "**Control Commands:**\\n"
+            "• `/addsource <ID>` - Source ထည့်သည်နှင့် အတိတ်က Post များပါ Auto Copy စတင်မည်\\n"
+            "• `/settarget <ID>` - Target Channel သတ်မှတ်ရန်\\n"
+            "• `/setlog <ID>` - Log Channel သတ်မှတ်ရန်\\n"
+            "• `/delsource <ID>` - Source ဖျက်ရန်\\n"
+            "• `/sources` - Active Sources ကြည့်ရန်\\n"
+            "• `/range <Source> <Start_ID> <End_ID>` - ID အလိုက် အစုလိုက် ကူးရန်\\n"
+            "• `/backup` - Database backup ကို Log Channel သို့ ပို့ရန်\\n"
+            "• `/toggle` - Bot စနစ် ဖွင့်/ပိတ် ပြုလုပ်ရန်\\n"
             "• `/status` - စနစ် Status ကြည့်ရန်"
         )
         await event.respond(panel_text)
@@ -477,12 +542,20 @@ async def main():
             entity = await bot.get_entity(int(src_raw) if src_raw.lstrip('-').isdigit() else src_raw)
             src_str = str(entity.id)
         except Exception:
+            entity = src_raw
             src_str = src_raw
 
         if src_str not in db["sources"]:
             db["sources"].append(src_str)
             save_database(db)
-            await event.respond(f"✅ **Source Added Successfully:** `{src_str}`")
+            
+            status_msg = await event.respond(
+                f"✅ **Source Added Successfully:** `{src_str}`\\n"
+                f"🚀 **Source ထဲရှိ အတိတ်က Post များအားလုံးကို တိုက်ရိုက် Auto Copy စတင်နေပါသည်...**"
+            )
+            
+            # Start background history sync task immediately
+            asyncio.create_task(sync_source_history(entity, status_msg))
         else:
             await event.respond("⚠️ ဒီ Source က စာရင်းထဲတွင် ရှိပြီးသား ဖြစ်ပါသည်။")
 
@@ -504,9 +577,9 @@ async def main():
         if not sources:
             await event.respond("📡 No active sources configured.")
             return
-        text = "📡 **Active Monitored Sources:**\n"
+        text = "📡 **Active Monitored Sources:**\\n"
         for idx, s in enumerate(sources, 1):
-            text += f"{idx}. `{s}`\n"
+            text += f"{idx}. `{s}`\\n"
         await event.respond(text)
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]toggle$'))
@@ -539,15 +612,15 @@ async def main():
         mins, secs = divmod(rem, 60)
 
         status_report = (
-            "📊 **DETAILED SYSTEM STATUS**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚙️ **Engine Status:** `{'ONLINE 🟢' if db.get('system_active') else 'PAUSED 🔴'}`\n"
-            f"🎯 **Target Channel:** `{db.get('target_channel') or 'Not Configured'}`\n"
-            f"🛡 **Log Channel:** `{db.get('log_channel') or 'Not Configured'}`\n"
-            f"📡 **Active Sources:** `{len(db.get('sources', []))}` channels\n"
-            f"📦 **Processed Media:** `{db.get('total_processed_files', 0)}` items\n"
-            f"⏱ **System Uptime:** `{hrs}h {mins}m {secs}s`\n"
-            f"💾 **Disk Free Space:** `{human_readable_size(free)} / {human_readable_size(total)}`\n"
+            "📊 **DETAILED SYSTEM STATUS**\\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n"
+            f"⚙️ **Engine Status:** `{'ONLINE 🟢' if db.get('system_active') else 'PAUSED 🔴'}`\\n"
+            f"🎯 **Target Channel:** `{db.get('target_channel') or 'Not Configured'}`\\n"
+            f"🛡 **Log Channel:** `{db.get('log_channel') or 'Not Configured'}`\\n"
+            f"📡 **Active Sources:** `{len(db.get('sources', []))}` channels\\n"
+            f"📦 **Processed Media:** `{db.get('total_processed_files', 0)}` items\\n"
+            f"⏱ **System Uptime:** `{hrs}h {mins}m {secs}s`\\n"
+            f"💾 **Disk Free Space:** `{human_readable_size(free)} / {human_readable_size(total)}`\\n"
         )
         await event.respond(status_report)
 
@@ -571,7 +644,6 @@ async def main():
         try:
             messages = await bot.get_messages(target_source, ids=list(range(start_id, end_id + 1)))
             
-            # Group range messages by grouped_id or single media
             pending_albums = defaultdict(list)
             single_messages = []
 
@@ -589,23 +661,21 @@ async def main():
                 else:
                     single_messages.append(msg)
 
-            # Process single messages
             for msg in single_messages:
                 res = await process_media_message(msg)
                 if res:
                     success += 1
                 await asyncio.sleep(1)
 
-            # Process range albums
             for gid, album_msgs in pending_albums.items():
                 ALBUM_BUFFERS[gid].extend(album_msgs)
                 await process_album_group(gid)
                 success += len(album_msgs)
 
             await status_msg.edit(
-                "✅ **RANGE TASK COMPLETED**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🎯 Total Items Copied: `{success}`\n"
+                "✅ **RANGE TASK COMPLETED**\\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n"
+                f"🎯 Total Items Copied: `{success}`\\n"
                 f"⏩ Total Items Skipped: `{skipped}`"
             )
 
@@ -613,7 +683,7 @@ async def main():
             logging.error(f"Range Process Error: {e}")
             await status_msg.edit(f"❌ **Range Task Error:** `{e}`")
 
-    # --- 6. REAL-TIME EVENT LISTENER ---
+    # --- 7. REAL-TIME EVENT LISTENER ---
     @bot.on(events.NewMessage())
     async def message_interceptor(event):
         if not db.get("system_active", True):
@@ -659,7 +729,7 @@ async def main():
             await asyncio.sleep(wait_time)
 
         except Exception as outer_err:
-            logging.critical(f"Critical Exception: {outer_err}\n{traceback.format_exc()}")
+            logging.critical(f"Critical Exception: {outer_err}\\n{traceback.format_exc()}")
 
     await bot.run_until_disconnected()
 
@@ -670,3 +740,9 @@ if __name__ == '__main__':
         logging.info("Bot manually terminated.")
     except Exception as boot_err:
         logging.critical(f"Fatal Boot Error: {boot_err}")
+'''
+
+with open("main.py", "w", encoding="utf-8") as f:
+    f.write(script_content)
+
+print("Script main.py successfully created.")
