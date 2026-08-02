@@ -19,7 +19,7 @@ except ImportError:
     HACHOIR_AVAILABLE = False
 
 # --- 1. LOGGING & CONFIGURATION ---
-LOG_FILE_NAME = "premium_bot.log"
+LOG_FILE_NAME = "original_copy_bot.log"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,7 +34,10 @@ API_ID = int(os.environ.get("API_ID", 38078790))
 API_HASH = os.environ.get("API_HASH", "c1b7e324a99544d7a9229ff5324af362")
 SESSION_STRING = os.environ.get("SESSION_STRING")
 
-DB_FILE = "premium_database.json"
+# Multi-Admin Config
+ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+
+DB_FILE = "exact_database.json"
 TEMP_DIR = "fast_cache"
 
 def load_database():
@@ -55,7 +58,7 @@ def load_database():
         "sources": [],
         "system_active": True,
         "total_processed_files": 0,
-        "processed_ids": [] # တင်ပြီးသား ဗီဒီယို ID များ မှတ်ရန်
+        "processed_ids": []
     }
 
 def save_database(data):
@@ -77,18 +80,24 @@ bot = TelegramClient(
     request_retries=10
 )
 
-# --- 2. UNIQUE MEDIA KEY GENERATOR (DUPLICATE CHECK) ---
+# --- 2. UTILITY HELPERS ---
+def is_authorized(user_id):
+    if not ADMIN_IDS:
+        return True
+    return user_id in ADMIN_IDS
+
 def get_media_key(msg):
-    """ဗီဒီယို/ဖိုင်တစ်ခုစီ၏ သီးသန့် ID ကို ထုတ်ပေးသည့် Function"""
-    if not msg or not (msg.video or msg.document):
+    """Photo, Video နှင့် Document များအတွက် Unique Media Key ရယူခြင်း"""
+    if not msg or not (msg.video or msg.photo or msg.document):
         return None
     if hasattr(msg, 'media') and hasattr(msg.media, 'document') and msg.media.document:
         return f"doc_{msg.media.document.id}"
+    elif hasattr(msg, 'media') and hasattr(msg.media, 'photo') and msg.media.photo:
+        return f"photo_{msg.media.photo.id}"
     elif msg.file:
         return f"file_{msg.file.size}_{msg.file.name}"
     return f"msg_{msg.chat_id}_{msg.id}"
 
-# --- 3. PROGRESS & FORMATTING HELPERS ---
 def human_readable_size(size_in_bytes):
     if size_in_bytes == 0:
         return "0 B"
@@ -121,7 +130,6 @@ class ProgressTracker:
         self.last_update_time = now
         elapsed = now - self.start_time
         percentage = (current / total) * 100 if total > 0 else 0
-        
         speed = current / elapsed if elapsed > 0 else 0
         eta = (total - current) / speed if speed > 0 else 0
 
@@ -152,71 +160,83 @@ async def dispatch_log(log_msg, level="INFO"):
         except Exception as e:
             logging.error(f"Failed to dispatch log: {e}")
 
-# --- 4. CORE MEDIA PROCESSOR (DIRECT SERVER COPY + DOWNLOAD FALLBACK) ---
+# --- 3. EXACT MEDIA PROCESSOR (PHOTO/VIDEO/DOCS) ---
 async def process_media_message(msg, status_msg):
     target = db.get("target_channel")
     if not target:
         await status_msg.edit("⚠️ Target Channel သတ်မှတ်ထားခြင်း မရှိသေးပါ။ `/settarget` ဖြင့် အရင် သတ်မှတ်ပေးပါ။")
         return False
 
-    caption_text = msg.text or ""
     media_key = get_media_key(msg)
 
+    # ORIGINAL CAPTION & FORMATTING ENTITIES
+    original_caption = msg.text or ""
+    original_entities = msg.entities
+
     # -------------------------------------------------------------
-    # METHOD 1: DIRECT SERVER-SIDE TRANSFER (အမြန်ဆုံး နည်းလမ်း - NO DOWNLOAD)
+    # METHOD 1: SERVER-SIDE EXACT COPY (PHOTO/VIDEO အားလုံး အကျုံးဝင်သည်)
     # -------------------------------------------------------------
     try:
-        await status_msg.edit("⚡ **Telegram Server-Side Direct Transfer ပြုလုပ်နေပါသည်...**")
+        await status_msg.edit("⚡ **Source မူရင်းအတိုင်း Direct Copy တင်နေပါသည်...**")
         
         await bot.send_file(
             target,
             msg.media,
-            caption=caption_text
+            caption=original_caption,
+            formatting_entities=original_entities
         )
 
-        # DB တွင် ဖိုင် တင်ပြီးကြောင်း မှတ်သားခြင်း
         db["total_processed_files"] = db.get("total_processed_files", 0) + 1
         if media_key and media_key not in db.get("processed_ids", []):
             db["processed_ids"].append(media_key)
         save_database(db)
 
         finish_text = (
-            "✅ **DIRECT TRANSFER COMPLETED**\n"
+            "✅ **EXACT COPY SUCCESS**\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **Target:** `{target}`\n"
-            f"⚡ **Speed:** Instant (Server-side copy)"
+            f"⚡ **Status:** Source အတိုင်း ၁၀၀% တစ်ပုံစံတည်း တင်ပြီးပါပြီ။"
         )
         await status_msg.edit(finish_text)
-        await dispatch_log(f"✅ **DIRECT COPY SUCCESS:** Msg ID `{msg.id}`", "INFO")
+        await dispatch_log(f"✅ **EXACT COPY SUCCESS:** Msg ID `{msg.id}`", "INFO")
 
         await asyncio.sleep(1.5)
         await status_msg.delete()
         return True
 
     except Exception as fast_err:
-        logging.info(f"Direct transfer failed ({fast_err}). Fallback to Download & Upload method.")
-        await status_msg.edit("⚠️ **Direct Copy မရပါသဖြင့် Download/Upload နည်းလမ်းသို့ ပြောင်းလဲနေပါသည်။**")
+        logging.info(f"Direct copy failed ({fast_err}). Fallback to Download & Upload.")
+        await status_msg.edit("⚠️ **Direct Transfer မရပါသဖြင့် Download/Upload နည်းလမ်းသို့ ပြောင်းလဲနေပါသည်။**")
         await asyncio.sleep(1)
 
     # -------------------------------------------------------------
-    # METHOD 2: DOWNLOAD & RE-UPLOAD (RESTRICTED CONTENT များအတွက် FALLBACK)
+    # METHOD 2: DOWNLOAD & RE-UPLOAD (RESTRICTED CONTENT FALLBACK)
     # -------------------------------------------------------------
     os.makedirs(TEMP_DIR, exist_ok=True)
     downloaded_path = None
-    file_name = "Unknown_Media"
+    thumb_path = None
+    file_name = "Media_File"
 
     if msg.file and msg.file.name:
         file_name = msg.file.name
     elif msg.video:
         file_name = f"Video_{msg.id}.mp4"
+    elif msg.photo:
+        file_name = f"Photo_{msg.id}.jpg"
 
     try:
-        # Download Phase
         dl_tracker = ProgressTracker("Downloading", status_msg, file_name)
         downloaded_path = await msg.download_media(
             file=TEMP_DIR + "/",
             progress_callback=dl_tracker.callback
         )
+
+        # Video ဖြစ်ပါက Thumbnail ယူမည်
+        if msg.video:
+            try:
+                thumb_path = await msg.download_media(thumb=-1, file=TEMP_DIR + "/")
+            except Exception:
+                thumb_path = None
 
         file_actual_name = os.path.basename(downloaded_path)
         ul_tracker = ProgressTracker("Uploading", status_msg, file_actual_name)
@@ -226,8 +246,7 @@ async def process_media_message(msg, status_msg):
 
         if is_video_ext:
             duration = 0
-            w = 1280
-            h = 720
+            w, h = 1280, 720
 
             if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
                 for attr in msg.media.document.attributes:
@@ -251,7 +270,7 @@ async def process_media_message(msg, status_msg):
                                 if metadata.has('height'):
                                     h = int(metadata.get('height'))
                 except Exception as ex:
-                    logging.warning(f"Hachoir extraction warning: {ex}")
+                    logging.warning(f"Hachoir warning: {ex}")
 
             video_attribute = DocumentAttributeVideo(
                 duration=duration,
@@ -263,20 +282,23 @@ async def process_media_message(msg, status_msg):
             await bot.send_file(
                 target,
                 downloaded_path,
-                caption=caption_text,
+                caption=original_caption,
+                formatting_entities=original_entities,
+                thumb=thumb_path if (thumb_path and os.path.exists(thumb_path)) else None,
                 attributes=[video_attribute],
                 force_document=False,
                 progress_callback=ul_tracker.callback
             )
         else:
+            # Photos သို့မဟုတ် အခြား Documents များကို တင်ပေးခြင်း
             await bot.send_file(
                 target,
                 downloaded_path,
-                caption=caption_text,
+                caption=original_caption,
+                formatting_entities=original_entities,
                 progress_callback=ul_tracker.callback
             )
 
-        # DB တွင် ဖိုင် တင်ပြီးကြောင်း မှတ်သားခြင်း
         db["total_processed_files"] = db.get("total_processed_files", 0) + 1
         if media_key and media_key not in db.get("processed_ids", []):
             db["processed_ids"].append(media_key)
@@ -287,7 +309,7 @@ async def process_media_message(msg, status_msg):
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📁 **File:** `{file_actual_name}`\n"
             f"🎯 **Target:** `{target}`\n"
-            f"🎬 **Status:** Force Streamable Video Player Mode"
+            f"🎬 **Status:** Source အတိုင်း Original Captions နှင့် တင်ပြီးပါပြီ။"
         )
         await status_msg.edit(finish_text)
         await dispatch_log(f"✅ **UPLOAD SUCCESS:** `{file_actual_name}`", "INFO")
@@ -304,26 +326,35 @@ async def process_media_message(msg, status_msg):
         return False
 
     finally:
-        if downloaded_path and os.path.exists(downloaded_path):
-            try:
-                os.remove(downloaded_path)
-                logging.info(f"Cache cleared: {downloaded_path}")
-            except Exception as c_err:
-                logging.warning(f"Failed cache clear: {c_err}")
+        for p in [downloaded_path, thumb_path]:
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
 
-# --- 5. MAIN BOT COMMANDS & HANDLERS ---
+# --- 4. COMMANDS & CONTROLS ---
 async def main():
     await bot.start()
-    logging.info("⚡ ULTIMATE HIGH-SPEED OMEGA ENGINE FULLY ONLINE ⚡")
+    logging.info("⚡ EXACT COPY BOT ONLINE (PHOTOS, VIDEOS & DOCUMENTS) ⚡")
+
+    def auth_check(func):
+        async def wrapper(event):
+            if not is_authorized(event.sender_id):
+                await event.respond("🚫 **Access Denied!** Admin သာ သုံးစွဲခွင့်ရှိပါသည်။")
+                return
+            await func(event)
+        return wrapper
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./](start|help|dashboard|menu)$'))
+    @auth_check
     async def dashboard_command(event):
         uptime_sec = int(time.time() - system_boot_time)
         hrs, rem = divmod(uptime_sec, 3600)
         mins, secs = divmod(rem, 60)
 
         panel_text = (
-            "💎 **PREMIUM HIGH-SPEED CONTROL PANEL**\n"
+            "💎 **EXACT COPY BOT DASHBOARD**\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 Target Channel: `{db.get('target_channel') or 'Not Configured'}`\n"
             f"🛡 Log Channel: `{db.get('log_channel') or 'Not Configured'}`\n"
@@ -332,29 +363,64 @@ async def main():
             f"📦 Total Processed: `{db.get('total_processed_files', 0)}` files\n"
             f"⏱ System Uptime: `{hrs}h {mins}m {secs}s`\n\n"
             "**Control Commands:**\n"
-            "• `/status` - စနစ်၏ လက်ရှိ အခြေအနေ ကြည့်ရန်\n"
-            "• `/settarget <ID>` - Set Target Channel\n"
-            "• `/setlog <ID>` - Set System Log Channel\n"
-            "• `/addsource <ID/Link>` - Add Source & Auto Fetch All Past Videos\n"
-            "• `/delsource <ID/Link>` - Remove Source Monitor\n"
-            "• `/sources` - View Active Sources\n"
-            "• `/toggle` - Pause / Resume Engine"
+            "• `/settarget <ID>` - Target Channel သတ်မှတ်ရန်\n"
+            "• `/setlog <ID>` - Log Channel သတ်မှတ်ရန်\n"
+            "• `/addsource <ID>` - Source ထည့်ပြီး Auto Copy လုပ်ရန်\n"
+            "• `/range <Source> <Start_ID> <End_ID>` - ID အလိုက် အဟောင်းများ ကူးရန်\n"
+            "• `/status` - စနစ် Status ကြည့်ရန်"
         )
         await event.respond(panel_text)
 
+    # --- RANGE BATCH COPY (PHOTOS, VIDEOS, DOCS) ---
+    @bot.on(events.NewMessage(pattern=r'(?i)^[./]range (\S+) (\d+) (\d+)'))
+    @auth_check
+    async def range_fetch(event):
+        src_raw = event.pattern_match.group(1)
+        start_id = int(event.pattern_match.group(2))
+        end_id = int(event.pattern_match.group(3))
+
+        if start_id > end_id:
+            await event.respond("⚠️ Start ID သည် End ID ထက် ပိုမကြီးရပါ။")
+            return
+
+        status_msg = await event.respond(f"🚀 **Range Processing Started:** ID `{start_id}` to `{end_id}`...")
+        success, skipped = 0, 0
+
+        for msg_id in range(start_id, end_id + 1):
+            try:
+                msg = await bot.get_messages(int(src_raw) if src_raw.lstrip('-').isdigit() else src_raw, ids=msg_id)
+                if msg and (msg.video or msg.photo or msg.document):
+                    media_key = get_media_key(msg)
+                    if media_key and media_key in db.get("processed_ids", []):
+                        skipped += 1
+                        continue
+
+                    info_msg = await event.respond(f"📥 **Processing ID: `{msg_id}`...**")
+                    res = await process_media_message(msg, info_msg)
+                    if res:
+                        success += 1
+                    await asyncio.sleep(1)
+            except Exception as e:
+                logging.error(f"Error fetching ID {msg_id}: {e}")
+
+        await status_msg.edit(
+            "✅ **RANGE TASK COMPLETED**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 Total Success: `{success}`\n"
+            f"⏩ Total Skipped: `{skipped}`"
+        )
+
+    # --- STANDARD COMMANDS ---
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]status$'))
+    @auth_check
     async def status_command(event):
         total, used, free = shutil.disk_usage(".")
         uptime_sec = int(time.time() - system_boot_time)
         hrs, rem = divmod(uptime_sec, 3600)
         mins, secs = divmod(rem, 60)
 
-        cache_files_count = 0
-        if os.path.exists(TEMP_DIR):
-            cache_files_count = len(os.listdir(TEMP_DIR))
-
         status_report = (
-            "📊 **SYSTEM DETAILED STATUS REPORT**\n"
+            "📊 **DETAILED SYSTEM STATUS**\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"⚙️ **Engine Status:** `{'ONLINE 🟢' if db.get('system_active') else 'PAUSED 🔴'}`\n"
             f"🎯 **Target Channel:** `{db.get('target_channel') or 'Not Configured'}`\n"
@@ -363,11 +429,11 @@ async def main():
             f"📦 **Processed Media:** `{db.get('total_processed_files', 0)}` files\n"
             f"⏱ **System Uptime:** `{hrs}h {mins}m {secs}s`\n"
             f"💾 **Disk Free Space:** `{human_readable_size(free)} / {human_readable_size(total)}`\n"
-            f"📂 **Active Cache Files:** `{cache_files_count}` files\n"
         )
         await event.respond(status_report)
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]settarget (.+)'))
+    @auth_check
     async def set_target(event):
         val = event.pattern_match.group(1).strip()
         target = int(val) if val.lstrip('-').isdigit() else val
@@ -376,6 +442,7 @@ async def main():
         await event.respond(f"✅ **Target Channel Updated:** `{target}`")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]setlog (.+)'))
+    @auth_check
     async def set_log(event):
         val = event.pattern_match.group(1).strip()
         log_id = int(val) if val.lstrip('-').isdigit() else val
@@ -384,11 +451,10 @@ async def main():
         await event.respond(f"✅ **Log Channel Updated:** `{log_id}`")
         await dispatch_log("Log Channel linked successfully.", "INFO")
 
-    # --- SOURCE ထည့်သည်နှင့် အဟောင်းမှ အသစ်သို့ ALL FETCH + DUPLICATE SKIP HANDLER ---
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]addsource (.+)'))
+    @auth_check
     async def add_source(event):
         src_raw = event.pattern_match.group(1).strip()
-
         try:
             entity = await bot.get_entity(int(src_raw) if src_raw.lstrip('-').isdigit() else src_raw)
             src_str = str(entity.id)
@@ -399,54 +465,46 @@ async def main():
             db["sources"].append(src_str)
             save_database(db)
             await event.respond(f"✅ **Source Added Successfully:** `{src_str}`")
-            await dispatch_log(f"Source Added: `{src_str}`", "INFO")
 
-            status_msg = await event.respond("🔍 **Source ၏ ဖိုင်အဟောင်းအားလုံးကို စတင် စစ်ဆေးနေပါပြီ...**")
-            
+            status_msg = await event.respond("🔍 **Source ၏ ဖိုင်အဟောင်းများကို စတင် ကူးယူနေပါပြီ...**")
             try:
-                fetched_count = 0
-                skipped_count = 0
-                
-                # limit=None ဖြင့် အရင် ဗီဒီယို အကုန်လုံးကို အဟောင်းမှ အသစ်သို့ စစ်မည်
+                fetched_count, skipped_count = 0, 0
                 async for msg in bot.iter_messages(entity if 'entity' in locals() else src_str, limit=None, reverse=True):
-                    if msg and (msg.video or msg.document):
+                    if msg and (msg.video or msg.photo or msg.document):
                         media_key = get_media_key(msg)
-                        
-                        # Target ထဲ တင်ပြီးသား ဖိုင်ဖြစ်နေပါက မလိုအပ်ဘဲ ထပ်မဒေါင်းဘဲ ကျော်မည်
                         if media_key and media_key in db.get("processed_ids", []):
                             skipped_count += 1
                             continue
 
                         fetched_count += 1
-                        info_msg = await event.respond(f"📥 **[ဖိုင်အမှတ် {fetched_count}] ဖိုင်အဟောင်း (ID: `{msg.id}`) ကို စတင် တင်နေပါပြီ...**")
+                        info_msg = await event.respond(f"📥 **[ဖိုင်အမှတ် {fetched_count}] ဖိုင်အဟောင်း (ID: `{msg.id}`) ကို တင်နေပါပြီ...**")
                         await process_media_message(msg, info_msg)
-                        await asyncio.sleep(1) # Telegram Rate Limit ကာကွယ်ရန်
+                        await asyncio.sleep(1)
 
-                summary_text = (
+                await status_msg.edit(
                     "✅ **SOURCE FETCHING COMPLETED**\n"
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📦 **တင်ပြီးခဲ့သော ဗီဒီယိုသစ်:** `{fetched_count}` ခု\n"
-                    f"⏩ **ရှိပြီးသားမို့ ကျော်ခဲ့သော ဗီဒီယို:** `{skipped_count}` ခု"
+                    f"📦 **မီဒီယာသစ် တင်ပြီး:** `{fetched_count}` ခု\n"
+                    f"⏩ **ရှိပြီးသားမို့ ကျော်ခဲ့:** `{skipped_count}` ခု"
                 )
-                await status_msg.edit(summary_text)
-
             except Exception as e:
-                await status_msg.edit(f"⚠️ Source ထည့်ပြီးသော်လည်း ဖိုင်အဟောင်းများ ယူရာတွင် Error တက်ခဲ့ပါသည်: `{e}`")
+                await status_msg.edit(f"⚠️ Source ဖိုင်အဟောင်းများ ယူရာတွင် Error တက်ခဲ့ပါသည်: `{e}`")
         else:
             await event.respond("⚠️ ဒီ Source က စာရင်းထဲတွင် ရှိပြီးသား ဖြစ်ပါသည်။")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]delsource (.+)'))
+    @auth_check
     async def del_source(event):
         src = event.pattern_match.group(1).strip()
         if src in db["sources"]:
             db["sources"].remove(src)
             save_database(db)
             await event.respond(f"🗑 **Source Removed:** `{src}`")
-            await dispatch_log(f"Source Removed: `{src}`", "INFO")
         else:
             await event.respond("⚠️ Source not found.")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]sources$'))
+    @auth_check
     async def list_sources(event):
         sources = db.get("sources", [])
         if not sources:
@@ -458,13 +516,14 @@ async def main():
         await event.respond(text)
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]toggle$'))
+    @auth_check
     async def toggle_system(event):
         db["system_active"] = not db.get("system_active", True)
         save_database(db)
         state = "ONLINE 🟢" if db["system_active"] else "PAUSED 🔴"
         await event.respond(f"🔄 **Engine State:** `{state}`")
 
-    # --- REAL-TIME NEW MESSAGE INTERCEPTOR ---
+    # --- REAL-TIME LISTENER (PHOTOS, VIDEOS, DOCUMENTS) ---
     @bot.on(events.NewMessage())
     async def message_interceptor(event):
         if not db.get("system_active", True):
@@ -489,12 +548,13 @@ async def main():
                 for s in sources
             )
 
-            if is_matched and (event.video or event.document):
+            # Photos, Videos နှင့် Documents များကို ဖမ်းယူခြင်း
+            if is_matched and (event.video or event.photo or event.document):
                 media_key = get_media_key(event.message)
                 if media_key and media_key in db.get("processed_ids", []):
-                    return # တင်ပြီးသားဖြစ်ပါက ကျော်မည်
+                    return
 
-                status_msg = await event.respond("💎 **Real-time Media Detected...**")
+                status_msg = await event.respond("💎 **New Media Detected! Copying exact content...**")
                 await process_media_message(event.message, status_msg)
 
         except errors.FloodWaitError as flood_err:
