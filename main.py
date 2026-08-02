@@ -23,7 +23,7 @@ LOG_FILE_NAME = "premium_bot.log"
 
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] [%(levelname)s] [%(filename)s:%(lineno)d]  %(message)s',
+    format='[%(asctime)s] [%(levelname)s] [%(filename)s:%(lineno)d] — %(message)s',
     handlers=[
         logging.FileHandler(LOG_FILE_NAME, encoding='utf-8'),
         logging.StreamHandler()
@@ -126,16 +126,16 @@ class ProgressTracker:
         eta = (total - current) / speed if speed > 0 else 0
 
         filled_blocks = int(percentage // 10)
-        progress_bar = "" * filled_blocks + "" * (10 - filled_blocks)
+        progress_bar = "█" * filled_blocks + "░" * (10 - filled_blocks)
 
         status_text = (
-            f" **{self.action_name.upper()} IN PROGRESS**\n"
-            "\n"
-            f" **File:** `{self.file_name}`\n"
-            f" **Progress:** `[{progress_bar}] {percentage:.1f}%`\n"
-            f" **Speed:** `{human_readable_size(speed)}/s`\n"
-            f" **Size:** `{human_readable_size(current)} / {human_readable_size(total)}`\n"
-            f" **ETA:** `{human_readable_time(eta)}`"
+            f"⚡ **{self.action_name.upper()} IN PROGRESS**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📁 **File:** `{self.file_name}`\n"
+            f"📊 **Progress:** `[{progress_bar}] {percentage:.1f}%`\n"
+            f"🚀 **Speed:** `{human_readable_size(speed)}/s`\n"
+            f"📦 **Size:** `{human_readable_size(current)} / {human_readable_size(total)}`\n"
+            f"⏱ **ETA:** `{human_readable_time(eta)}`"
         )
 
         try:
@@ -147,18 +147,60 @@ async def dispatch_log(log_msg, level="INFO"):
     log_chat_id = db.get("log_channel")
     if log_chat_id:
         try:
-            icon = "" if level == "INFO" else "" if level == "ERROR" else ""
+            icon = "🟢" if level == "INFO" else "❌" if level == "ERROR" else "⚠️"
             await bot.send_message(log_chat_id, f"{icon} **SYSTEM LOG [{level}]**\n{log_msg}")
         except Exception as e:
             logging.error(f"Failed to dispatch log: {e}")
 
-# --- 4. CORE MEDIA PROCESSOR WITH DUPLICATE RECORDING ---
+# --- 4. CORE MEDIA PROCESSOR (DIRECT SERVER COPY + DOWNLOAD FALLBACK) ---
 async def process_media_message(msg, status_msg):
     target = db.get("target_channel")
     if not target:
-        await status_msg.edit(" Target Channel သတ်မှတ်ထားခြင်း မရှိသေးပါ။ `/settarget` ဖြင့် အရင် သတ်မှတ်ပေးပါ။")
+        await status_msg.edit("⚠️ Target Channel သတ်မှတ်ထားခြင်း မရှိသေးပါ။ `/settarget` ဖြင့် အရင် သတ်မှတ်ပေးပါ။")
         return False
 
+    caption_text = msg.text or ""
+    media_key = get_media_key(msg)
+
+    # -------------------------------------------------------------
+    # METHOD 1: DIRECT SERVER-SIDE TRANSFER (အမြန်ဆုံး နည်းလမ်း - NO DOWNLOAD)
+    # -------------------------------------------------------------
+    try:
+        await status_msg.edit("⚡ **Telegram Server-Side Direct Transfer ပြုလုပ်နေပါသည်...**")
+        
+        await bot.send_file(
+            target,
+            msg.media,
+            caption=caption_text
+        )
+
+        # DB တွင် ဖိုင် တင်ပြီးကြောင်း မှတ်သားခြင်း
+        db["total_processed_files"] = db.get("total_processed_files", 0) + 1
+        if media_key and media_key not in db.get("processed_ids", []):
+            db["processed_ids"].append(media_key)
+        save_database(db)
+
+        finish_text = (
+            "✅ **DIRECT TRANSFER COMPLETED**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 **Target:** `{target}`\n"
+            f"⚡ **Speed:** Instant (Server-side copy)"
+        )
+        await status_msg.edit(finish_text)
+        await dispatch_log(f"✅ **DIRECT COPY SUCCESS:** Msg ID `{msg.id}`", "INFO")
+
+        await asyncio.sleep(1.5)
+        await status_msg.delete()
+        return True
+
+    except Exception as fast_err:
+        logging.info(f"Direct transfer failed ({fast_err}). Fallback to Download & Upload method.")
+        await status_msg.edit("⚠️ **Direct Copy မရပါသဖြင့် Download/Upload နည်းလမ်းသို့ ပြောင်းလဲနေပါသည်။**")
+        await asyncio.sleep(1)
+
+    # -------------------------------------------------------------
+    # METHOD 2: DOWNLOAD & RE-UPLOAD (RESTRICTED CONTENT များအတွက် FALLBACK)
+    # -------------------------------------------------------------
     os.makedirs(TEMP_DIR, exist_ok=True)
     downloaded_path = None
     file_name = "Unknown_Media"
@@ -167,9 +209,6 @@ async def process_media_message(msg, status_msg):
         file_name = msg.file.name
     elif msg.video:
         file_name = f"Video_{msg.id}.mp4"
-
-    caption_text = msg.text or ""
-    media_key = get_media_key(msg)
 
     try:
         # Download Phase
@@ -244,14 +283,14 @@ async def process_media_message(msg, status_msg):
         save_database(db)
 
         finish_text = (
-            " **TASK COMPLETED SUCCESSFULLY**\n"
-            "\n"
-            f" **File:** `{file_actual_name}`\n"
-            f" **Target:** `{target}`\n"
-            f" **Status:** Force Streamable Video Player Mode"
+            "✅ **TASK COMPLETED SUCCESSFULLY**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📁 **File:** `{file_actual_name}`\n"
+            f"🎯 **Target:** `{target}`\n"
+            f"🎬 **Status:** Force Streamable Video Player Mode"
         )
         await status_msg.edit(finish_text)
-        await dispatch_log(f" **UPLOAD SUCCESS:** `{file_actual_name}`", "INFO")
+        await dispatch_log(f"✅ **UPLOAD SUCCESS:** `{file_actual_name}`", "INFO")
 
         await asyncio.sleep(2)
         await status_msg.delete()
@@ -260,8 +299,8 @@ async def process_media_message(msg, status_msg):
     except Exception as inner_err:
         err_trace = traceback.format_exc()
         logging.error(f"Media Task Error: {inner_err}\n{err_trace}")
-        await status_msg.edit(f" **Task Failed:** `{str(inner_err)}`")
-        await dispatch_log(f" **Processing Error:** `{str(inner_err)}`", "ERROR")
+        await status_msg.edit(f"❌ **Task Failed:** `{str(inner_err)}`")
+        await dispatch_log(f"❌ **Processing Error:** `{str(inner_err)}`", "ERROR")
         return False
 
     finally:
@@ -275,7 +314,7 @@ async def process_media_message(msg, status_msg):
 # --- 5. MAIN BOT COMMANDS & HANDLERS ---
 async def main():
     await bot.start()
-    logging.info(" ULTIMATE HIGH-SPEED OMEGA ENGINE FULLY ONLINE ")
+    logging.info("⚡ ULTIMATE HIGH-SPEED OMEGA ENGINE FULLY ONLINE ⚡")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./](start|help|dashboard|menu)$'))
     async def dashboard_command(event):
@@ -284,22 +323,22 @@ async def main():
         mins, secs = divmod(rem, 60)
 
         panel_text = (
-            " **PREMIUM HIGH-SPEED CONTROL PANEL**\n"
-            "\n"
-            f" Target Channel: `{db.get('target_channel') or 'Not Configured'}`\n"
-            f" Log Channel: `{db.get('log_channel') or 'Not Configured'}`\n"
-            f" Active Sources: `{len(db.get('sources', []))}` active\n"
-            f" Engine Status: `{'ONLINE ' if db.get('system_active') else 'PAUSED '}`\n"
-            f" Total Processed: `{db.get('total_processed_files', 0)}` files\n"
-            f" System Uptime: `{hrs}h {mins}m {secs}s`\n\n"
+            "💎 **PREMIUM HIGH-SPEED CONTROL PANEL**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 Target Channel: `{db.get('target_channel') or 'Not Configured'}`\n"
+            f"🛡 Log Channel: `{db.get('log_channel') or 'Not Configured'}`\n"
+            f"📡 Active Sources: `{len(db.get('sources', []))}` active\n"
+            f"⚙️ Engine Status: `{'ONLINE 🟢' if db.get('system_active') else 'PAUSED 🔴'}`\n"
+            f"📦 Total Processed: `{db.get('total_processed_files', 0)}` files\n"
+            f"⏱ System Uptime: `{hrs}h {mins}m {secs}s`\n\n"
             "**Control Commands:**\n"
-            " `/status` - စနစ်၏ လက်ရှိ အခြေအနေ ကြည့်ရန်\n"
-            " `/settarget <ID>` - Set Target Channel\n"
-            " `/setlog <ID>` - Set System Log Channel\n"
-            " `/addsource <ID/Link>` - Add Source & Auto Fetch All Past Videos\n"
-            " `/delsource <ID/Link>` - Remove Source Monitor\n"
-            " `/sources` - View Active Sources\n"
-            " `/toggle` - Pause / Resume Engine"
+            "• `/status` - စနစ်၏ လက်ရှိ အခြေအနေ ကြည့်ရန်\n"
+            "• `/settarget <ID>` - Set Target Channel\n"
+            "• `/setlog <ID>` - Set System Log Channel\n"
+            "• `/addsource <ID/Link>` - Add Source & Auto Fetch All Past Videos\n"
+            "• `/delsource <ID/Link>` - Remove Source Monitor\n"
+            "• `/sources` - View Active Sources\n"
+            "• `/toggle` - Pause / Resume Engine"
         )
         await event.respond(panel_text)
 
@@ -315,16 +354,16 @@ async def main():
             cache_files_count = len(os.listdir(TEMP_DIR))
 
         status_report = (
-            " **SYSTEM DETAILED STATUS REPORT**\n"
-            "\n"
-            f" **Engine Status:** `{'ONLINE ' if db.get('system_active') else 'PAUSED '}`\n"
-            f" **Target Channel:** `{db.get('target_channel') or 'Not Configured'}`\n"
-            f" **Log Channel:** `{db.get('log_channel') or 'Not Configured'}`\n"
-            f" **Active Sources:** `{len(db.get('sources', []))}` channels\n"
-            f" **Processed Media:** `{db.get('total_processed_files', 0)}` files\n"
-            f" **System Uptime:** `{hrs}h {mins}m {secs}s`\n"
-            f" **Disk Free Space:** `{human_readable_size(free)} / {human_readable_size(total)}`\n"
-            f" **Active Cache Files:** `{cache_files_count}` files\n"
+            "📊 **SYSTEM DETAILED STATUS REPORT**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚙️ **Engine Status:** `{'ONLINE 🟢' if db.get('system_active') else 'PAUSED 🔴'}`\n"
+            f"🎯 **Target Channel:** `{db.get('target_channel') or 'Not Configured'}`\n"
+            f"🛡 **Log Channel:** `{db.get('log_channel') or 'Not Configured'}`\n"
+            f"📡 **Active Sources:** `{len(db.get('sources', []))}` channels\n"
+            f"📦 **Processed Media:** `{db.get('total_processed_files', 0)}` files\n"
+            f"⏱ **System Uptime:** `{hrs}h {mins}m {secs}s`\n"
+            f"💾 **Disk Free Space:** `{human_readable_size(free)} / {human_readable_size(total)}`\n"
+            f"📂 **Active Cache Files:** `{cache_files_count}` files\n"
         )
         await event.respond(status_report)
 
@@ -334,7 +373,7 @@ async def main():
         target = int(val) if val.lstrip('-').isdigit() else val
         db["target_channel"] = target
         save_database(db)
-        await event.respond(f" **Target Channel Updated:** `{target}`")
+        await event.respond(f"✅ **Target Channel Updated:** `{target}`")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]setlog (.+)'))
     async def set_log(event):
@@ -342,7 +381,7 @@ async def main():
         log_id = int(val) if val.lstrip('-').isdigit() else val
         db["log_channel"] = log_id
         save_database(db)
-        await event.respond(f" **Log Channel Updated:** `{log_id}`")
+        await event.respond(f"✅ **Log Channel Updated:** `{log_id}`")
         await dispatch_log("Log Channel linked successfully.", "INFO")
 
     # --- SOURCE ထည့်သည်နှင့် အဟောင်းမှ အသစ်သို့ ALL FETCH + DUPLICATE SKIP HANDLER ---
@@ -359,10 +398,10 @@ async def main():
         if src_str not in db["sources"]:
             db["sources"].append(src_str)
             save_database(db)
-            await event.respond(f" **Source Added Successfully:** `{src_str}`")
+            await event.respond(f"✅ **Source Added Successfully:** `{src_str}`")
             await dispatch_log(f"Source Added: `{src_str}`", "INFO")
 
-            status_msg = await event.respond(" **Source ၏ ဖိုင်အဟောင်းအားလုံးကို စတင် စစ်ဆေးနေပါပြီ...**")
+            status_msg = await event.respond("🔍 **Source ၏ ဖိုင်အဟောင်းအားလုံးကို စတင် စစ်ဆေးနေပါပြီ...**")
             
             try:
                 fetched_count = 0
@@ -379,22 +418,22 @@ async def main():
                             continue
 
                         fetched_count += 1
-                        info_msg = await event.respond(f" **[ဖိုင်အမှတ် {fetched_count}] ဖိုင်အဟောင်း (ID: `{msg.id}`) ကို စတင် တင်နေပါပြီ...**")
+                        info_msg = await event.respond(f"📥 **[ဖိုင်အမှတ် {fetched_count}] ဖိုင်အဟောင်း (ID: `{msg.id}`) ကို စတင် တင်နေပါပြီ...**")
                         await process_media_message(msg, info_msg)
                         await asyncio.sleep(1) # Telegram Rate Limit ကာကွယ်ရန်
 
                 summary_text = (
-                    " **SOURCE FETCHING COMPLETED**\n"
-                    "\n"
-                    f" **တင်ပြီးခဲ့သော ဗီဒီယိုသစ်:** `{fetched_count}` ခု\n"
-                    f" **ရှိပြီးသားမို့ ကျော်ခဲ့သော ဗီဒီယို:** `{skipped_count}` ခု"
+                    "✅ **SOURCE FETCHING COMPLETED**\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📦 **တင်ပြီးခဲ့သော ဗီဒီယိုသစ်:** `{fetched_count}` ခု\n"
+                    f"⏩ **ရှိပြီးသားမို့ ကျော်ခဲ့သော ဗီဒီယို:** `{skipped_count}` ခု"
                 )
                 await status_msg.edit(summary_text)
 
             except Exception as e:
-                await status_msg.edit(f" Source ထည့်ပြီးသော်လည်း ဖိုင်အဟောင်းများ ယူရာတွင် Error တက်ခဲ့ပါသည်: `{e}`")
+                await status_msg.edit(f"⚠️ Source ထည့်ပြီးသော်လည်း ဖိုင်အဟောင်းများ ယူရာတွင် Error တက်ခဲ့ပါသည်: `{e}`")
         else:
-            await event.respond(" ဒီ Source က စာရင်းထဲတွင် ရှိပြီးသား ဖြစ်ပါသည်။")
+            await event.respond("⚠️ ဒီ Source က စာရင်းထဲတွင် ရှိပြီးသား ဖြစ်ပါသည်။")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]delsource (.+)'))
     async def del_source(event):
@@ -402,18 +441,18 @@ async def main():
         if src in db["sources"]:
             db["sources"].remove(src)
             save_database(db)
-            await event.respond(f" **Source Removed:** `{src}`")
+            await event.respond(f"🗑 **Source Removed:** `{src}`")
             await dispatch_log(f"Source Removed: `{src}`", "INFO")
         else:
-            await event.respond(" Source not found.")
+            await event.respond("⚠️ Source not found.")
 
     @bot.on(events.NewMessage(pattern=r'(?i)^[./]sources$'))
     async def list_sources(event):
         sources = db.get("sources", [])
         if not sources:
-            await event.respond(" No active sources configured.")
+            await event.respond("📡 No active sources configured.")
             return
-        text = " **Active Monitored Sources:**\n"
+        text = "📡 **Active Monitored Sources:**\n"
         for idx, s in enumerate(sources, 1):
             text += f"{idx}. `{s}`\n"
         await event.respond(text)
@@ -422,8 +461,8 @@ async def main():
     async def toggle_system(event):
         db["system_active"] = not db.get("system_active", True)
         save_database(db)
-        state = "ONLINE " if db["system_active"] else "PAUSED "
-        await event.respond(f" **Engine State:** `{state}`")
+        state = "ONLINE 🟢" if db["system_active"] else "PAUSED 🔴"
+        await event.respond(f"🔄 **Engine State:** `{state}`")
 
     # --- REAL-TIME NEW MESSAGE INTERCEPTOR ---
     @bot.on(events.NewMessage())
@@ -455,13 +494,13 @@ async def main():
                 if media_key and media_key in db.get("processed_ids", []):
                     return # တင်ပြီးသားဖြစ်ပါက ကျော်မည်
 
-                status_msg = await event.respond(" **Real-time Media Detected...**")
+                status_msg = await event.respond("💎 **Real-time Media Detected...**")
                 await process_media_message(event.message, status_msg)
 
         except errors.FloodWaitError as flood_err:
             wait_time = flood_err.seconds
             logging.warning(f"FloodWait Triggered: Waiting {wait_time}s")
-            await dispatch_log(f" FloodWait Warning: Waiting `{wait_time}` seconds.", "WARNING")
+            await dispatch_log(f"⏳ FloodWait Warning: Waiting `{wait_time}` seconds.", "WARNING")
             await asyncio.sleep(wait_time)
 
         except Exception as outer_err:
