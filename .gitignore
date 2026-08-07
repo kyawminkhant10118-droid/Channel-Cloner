@@ -1,8 +1,7 @@
-*.log
-*.json
+__pycache__/
+*.pyc
 *.session
 *.session-journal
-__pycache__/
-secure_media_cache/
+exact_database.json
 fast_cache/
 .env
