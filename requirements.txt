@@ -1,4 +1,2 @@
 telethon
 cryptg
-pillow
-hachoir
