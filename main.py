@@ -33,7 +33,6 @@ TEMP_DIR = "fast_cache"
 ALBUM_BUFFERS = defaultdict(list)
 ALBUM_LOCKS = set()
 
-# Real-time Task Monitor State
 CURRENT_TASK = {
     "action": "Idle (စောင့်ဆိုင်းနေသည်)",
     "file": "-",
@@ -109,7 +108,7 @@ def human_readable_time(seconds):
         return "00:00:00"
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{h:02d}:{m:02d}:{secs:02d}"
 
 def generate_clean_thumbnail(video_path, output_thumb_path):
     try:
@@ -218,7 +217,7 @@ class ProgressTracker:
         except Exception:
             pass
 
-# --- 5. MEDIA PROCESSOR ---
+# --- 5. MEDIA PROCESSOR (FIXED STREAMING METADATA) ---
 async def process_media_message(msg, status_msg=None, source_info="Unknown"):
     target = db.get("target_channel")
     if not target:
@@ -288,14 +287,44 @@ async def process_media_message(msg, status_msg=None, source_info="Unknown"):
         is_video = file_lower.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.m4v')) or msg.video
 
         if is_video:
-            duration, w, h = get_video_metadata(downloaded_path)
-            generated_thumb = f"{downloaded_path}_thumb.jpg"
-            thumb_path = generate_clean_thumbnail(downloaded_path, generated_thumb)
+            # 1. မူရင်း Telegram Message ထဲမှ Metadata ရယူခြင်း
+            duration = 0
+            w, h = 1280, 720
+
+            if msg.video:
+                duration = getattr(msg.video, 'duration', 0) or 0
+                w = getattr(msg.video, 'width', 1280) or 1280
+                h = getattr(msg.video, 'height', 720) or 720
+            elif msg.document:
+                for attr in getattr(msg.document, 'attributes', []):
+                    if isinstance(attr, DocumentAttributeVideo):
+                        duration = getattr(attr, 'duration', 0) or 0
+                        w = getattr(attr, 'w', 1280) or 1280
+                        h = getattr(attr, 'h', 720) or 720
+                        break
+
+            # 2. မူရင်းထဲမှ Duration မရပါက FFprobe ဖြင့် စစ်ဆေးခြင်း
+            if duration == 0:
+                ff_dur, ff_w, ff_h = get_video_metadata(downloaded_path)
+                duration = ff_dur or duration
+                w = ff_w or w
+                h = ff_h or h
+
+            # 3. မူရင်း Telegram မက်ဆေ့ချ်ထဲမှ Thumbnail ကို တိုက်ရိုက် ရယူခြင်း
+            try:
+                thumb_path = await msg.download_media(thumb=-1, file=TEMP_DIR + "/")
+            except Exception:
+                thumb_path = None
+
+            # 4. မူရင်း Thumbnail မရှိပါက FFmpeg ဖြင့် သစ်ထုတ်ယူခြင်း
+            if not thumb_path or not os.path.exists(thumb_path):
+                generated_thumb = f"{downloaded_path}_thumb.jpg"
+                thumb_path = generate_clean_thumbnail(downloaded_path, generated_thumb)
 
             video_attribute = DocumentAttributeVideo(
-                duration=duration,
-                w=w,
-                h=h,
+                duration=int(duration),
+                w=int(w),
+                h=int(h),
                 supports_streaming=True
             )
 
@@ -357,7 +386,6 @@ def auth_check(func):
         await func(event)
     return wrapper
 
-# 🔥 အဟောင်းများ အကုန် လိုက်ကူးပေးမည့် FEATURE
 @bot.on(events.NewMessage(pattern=r'(?i)^[./](cloneold|copyall)(?:\s+(.+))?$'))
 @auth_check
 async def clone_old_history(event):
@@ -375,7 +403,7 @@ async def clone_old_history(event):
         sources_to_clone = db.get("sources", [])
 
     if not sources_to_clone:
-        await event.respond("⚠️ **Source မရှိသေးပါ။** `/addsource` ဖြင့် Source အရင်ထည့်ပါ သို့မဟုတ် `/copyall <Source_ID>` ဟု ရိုက်ထည့်ပါ။")
+        await event.respond("⚠️ **Source မရှိသေးပါ။** `/addsource` ဖြင့် Source အရင်ထည့်ပါ။")
         return
 
     status_msg = await event.respond("⏳ **ယခင် တက်ခဲ့ပြီးသား Media အဟောင်းများကို စတင် ရှာဖွေနေပါသည်...**")
@@ -391,18 +419,15 @@ async def clone_old_history(event):
             scanned_count = 0
             copied_count = 0
 
-            # reverse=True ကြောင့် အဟောင်းဆုံး မက်ဆေ့ချ်မှ အသစ်ဆုံး မက်ဆေ့ချ်သို့ စီ၍ ကူးပေးမည်
             async for message in bot.iter_messages(entity, reverse=True):
                 scanned_count += 1
 
                 if message.video or message.photo or message.document:
                     media_key = get_media_key(message)
 
-                    # ကူးပြီးသား ဖိုင်ဖြစ်ပါက ကျော်မည်
                     if media_key and media_key in db.get("processed_ids", []):
                         continue
 
-                    # Message တစ်ခုချင်းစီကို Process လုပ်ခြင်း
                     progress_info = f"`{title}` (Scanned: {scanned_count} | Copied: {copied_count})"
                     task_msg = await event.respond(f"📦 **အဟောင်းများ ကူးယူနေပါသည်:** {progress_info}")
                     
@@ -410,7 +435,6 @@ async def clone_old_history(event):
                     if success:
                         copied_count += 1
 
-                    # Telegram FloodWait မမိစေရန် ၁ စက္ကန့် နားမည်
                     await asyncio.sleep(1)
 
             await event.respond(f"✅ **`{title}` ၏ အဟောင်းများ ကူးယူခြင်း ပြီးစီးပါပြီ!**\n📊 Total Copied: `{copied_count}` items")
