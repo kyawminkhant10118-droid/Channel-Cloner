@@ -108,7 +108,7 @@ def human_readable_time(seconds):
         return "00:00:00"
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
-    return f"{h:02d}:{m:02d}:{secs:02d}"
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
 def generate_clean_thumbnail(video_path, output_thumb_path):
     try:
@@ -217,7 +217,7 @@ class ProgressTracker:
         except Exception:
             pass
 
-# --- 5. MEDIA PROCESSOR (FIXED STREAMING METADATA) ---
+# --- 5. MEDIA PROCESSOR ---
 async def process_media_message(msg, status_msg=None, source_info="Unknown"):
     target = db.get("target_channel")
     if not target:
@@ -287,7 +287,6 @@ async def process_media_message(msg, status_msg=None, source_info="Unknown"):
         is_video = file_lower.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.m4v')) or msg.video
 
         if is_video:
-            # 1. မူရင်း Telegram Message ထဲမှ Metadata ရယူခြင်း
             duration = 0
             w, h = 1280, 720
 
@@ -303,20 +302,17 @@ async def process_media_message(msg, status_msg=None, source_info="Unknown"):
                         h = getattr(attr, 'h', 720) or 720
                         break
 
-            # 2. မူရင်းထဲမှ Duration မရပါက FFprobe ဖြင့် စစ်ဆေးခြင်း
             if duration == 0:
                 ff_dur, ff_w, ff_h = get_video_metadata(downloaded_path)
                 duration = ff_dur or duration
                 w = ff_w or w
                 h = ff_h or h
 
-            # 3. မူရင်း Telegram မက်ဆေ့ချ်ထဲမှ Thumbnail ကို တိုက်ရိုက် ရယူခြင်း
             try:
                 thumb_path = await msg.download_media(thumb=-1, file=TEMP_DIR + "/")
             except Exception:
                 thumb_path = None
 
-            # 4. မူရင်း Thumbnail မရှိပါက FFmpeg ဖြင့် သစ်ထုတ်ယူခြင်း
             if not thumb_path or not os.path.exists(thumb_path):
                 generated_thumb = f"{downloaded_path}_thumb.jpg"
                 thumb_path = generate_clean_thumbnail(downloaded_path, generated_thumb)
@@ -493,7 +489,7 @@ async def dashboard_command(event):
         f"⏱ **System Uptime:** `{hrs}h {mins}m {secs}s`\n\n"
         "**Available Commands:**\n"
         "• `/copyall` - Source ထဲရှိ **အဟောင်းများ အားလုံး** လိုက်ကူးရန်\n"
-        "• `/addsource <Link/ID>` - Source ထည့်ရန် (Name ပြပေးမည်)\n"
+        "• `/addsource <Link/ID>` - Source ထည့်ရန်\n"
         "• `/settarget <Link/ID>` - Target သတ်မှတ်ရန်\n"
         "• `/setlog <Link/ID>` - Log Channel သတ်မှတ်ရန်\n"
         "• `/live` - လက်ရှိ ဘာလုပ်နေလဲ ကြည့်ရန်\n"
