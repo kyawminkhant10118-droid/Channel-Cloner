@@ -10,9 +10,9 @@ import traceback
 from collections import defaultdict
 from telethon import TelegramClient, events, errors
 from telethon.sessions import StringSession
-from telethon.tl.types import DocumentAttributeVideo, DocumentAttributeFilename
+from telethon.tl.types import DocumentAttributeVideo
 
-# --- 1. LOGGING & CONFIGURATION ---
+# --- LOGGING & CONFIGURATION ---
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] [%(levelname)s] — %(message)s',
@@ -69,7 +69,7 @@ if SESSION_STRING:
 else:
     bot = TelegramClient('bot_session', API_ID, API_HASH)
 
-# --- 2. UTILITY & FFMPEG HELPERS ---
+# --- UTILITIES ---
 def is_authorized(user_id):
     if not ADMIN_IDS:
         return True
@@ -84,17 +84,8 @@ def get_media_key(msg):
         return f"photo_{msg.media.photo.id}"
     return f"msg_{msg.chat_id}_{msg.id}"
 
-def human_readable_size(size_in_bytes):
-    if size_in_bytes == 0:
-        return "0 B"
-    size_name = ("B", "KB", "MB", "GB", "TB")
-    i = int(math.floor(math.log(size_in_bytes, 1024)))
-    p = math.pow(1024, i)
-    s = round(size_in_bytes / p, 2)
-    return f"{s} {size_name[i]}"
-
 def generate_clean_thumbnail(video_path, output_thumb_path):
-    """FFmpeg သုံး၍ ဗီဒီယို၏ ၂ စက္ကန့်မြောက် Frame မှ သန့်ရှင်းသော Thumbnail ထုတ်ယူခြင်း (အဖြူရောင်မဖြစ်စေရန်)"""
+    """FFmpeg သုံး၍ ဗီဒီယို၏ ၂ စက္ကန့်မြောက် Frame မှ Thumbnail ထုတ်ယူခြင်း (အဖြူရောင်ဖြစ်ခြင်းမှ ကာကွယ်ရန်)"""
     try:
         command = [
             'ffmpeg', '-y',
@@ -108,11 +99,11 @@ def generate_clean_thumbnail(video_path, output_thumb_path):
         if os.path.exists(output_thumb_path) and os.path.getsize(output_thumb_path) > 0:
             return output_thumb_path
     except Exception as e:
-        logging.warning(f"FFmpeg Thumbnail Extraction Warning: {e}")
+        logging.warning(f"FFmpeg Thumbnail Error: {e}")
     return None
 
 def get_video_metadata(video_path):
-    """FFprobe သုံး၍ Duration, Width, Height ကို တိကျစွာ ရယူခြင်း"""
+    """FFprobe သုံး၍ Duration, Width, Height ကို ယူခြင်း"""
     duration, width, height = 0, 1280, 720
     try:
         cmd = [
@@ -128,19 +119,10 @@ def get_video_metadata(video_path):
             height = int(lines[1])
             duration = int(float(lines[2]))
     except Exception as e:
-        logging.warning(f"FFprobe metadata error: {e}")
+        logging.warning(f"FFprobe Metadata Error: {e}")
     return duration, width, height
 
-async def dispatch_log(log_msg, level="INFO"):
-    log_chat_id = db.get("log_channel")
-    if log_chat_id:
-        try:
-            icon = "🟢" if level == "INFO" else "❌" if level == "ERROR" else "⚠️"
-            await bot.send_message(log_chat_id, f"{icon} **SYSTEM LOG [{level}]**\n{log_msg}")
-        except Exception as e:
-            logging.error(f"Log Dispatch Failed: {e}")
-
-# --- 3. FAST MEDIA PROCESSOR ---
+# --- MEDIA PROCESSOR ---
 async def process_media_message(msg, status_msg=None):
     target = db.get("target_channel")
     if not target:
@@ -152,7 +134,7 @@ async def process_media_message(msg, status_msg=None):
     original_caption = msg.text or ""
     original_entities = msg.entities
 
-    # ၁။ Direct Transfer စမ်းသပ်ခြင်း (Forward ဖွင့်ထားပါက Instant Copy ရမည်)
+    # Direct Transfer စမ်းသပ်ခြင်း
     try:
         if status_msg:
             await status_msg.edit("⚡ **Direct Copy စတင်နေပါသည်...**")
@@ -175,45 +157,36 @@ async def process_media_message(msg, status_msg=None):
             await status_msg.delete()
         return True
 
-    except Exception as fast_err:
-        logging.info(f"Direct transfer failed (Restricted/Private). Switching to High-Speed Download/Upload Mode...")
+    except Exception:
         if status_msg:
-            await status_msg.edit("⚠️ **Restricted Content ဖြစ်သောကြောင့် မြန်နှုန်းမြင့် Download/Upload ပြုလုပ်နေပါသည်။**")
+            await status_msg.edit("⚠️ **Restricted Content ဖြစ်သောကြောင့် Fast Download/Upload ပြုလုပ်နေပါသည်။**")
 
-    # ၂။ Forward ပိတ်ထားပါက High-Speed Download & Re-upload ပြုလုပ်ခြင်း
+    # Forward ပိတ်ထားသော Restricted Channel များအတွက် Download & Re-upload ပြုလုပ်ခြင်း
     os.makedirs(TEMP_DIR, exist_ok=True)
     downloaded_path = None
     thumb_path = None
 
     try:
-        # Optimized Chunk Download (Speed ပိုမြန်အောင် chunk_size ကို 1MB ထားရှိခြင်း)
-        downloaded_path = await msg.download_media(
-            file=TEMP_DIR + "/"
-        )
-
+        downloaded_path = await msg.download_media(file=TEMP_DIR + "/")
         if not downloaded_path or not os.path.exists(downloaded_path):
-            raise Exception("Download failed, file not created.")
+            raise Exception("Download ယူ၍ မရရှိပါ။")
 
         file_lower = downloaded_path.lower()
         is_video = file_lower.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.m4v')) or msg.video
 
         if is_video:
             if status_msg:
-                await status_msg.edit("🎬 **Video Streamable & Thumbnail ပြင်ဆင်နေပါသည်...**")
+                await status_msg.edit("🎬 **Video Streaming & Thumbnail ပြင်ဆင်နေပါသည်...**")
 
-            # Duration/Width/Height ယူခြင်း
             duration, w, h = get_video_metadata(downloaded_path)
-            
-            # Thumbnail ထုတ်ယူခြင်း (အဖြူရောင်မဖြစ်စေရန်)
             generated_thumb = f"{downloaded_path}_thumb.jpg"
             thumb_path = generate_clean_thumbnail(downloaded_path, generated_thumb)
 
-            # File အဖြစ်မရောက်ဘဲ Video အဖြစ် Streaming တန်းကြည့်နိုင်စေရန် Video Attribute တပ်ဆင်ခြင်း
             video_attribute = DocumentAttributeVideo(
                 duration=duration,
                 w=w,
                 h=h,
-                supports_streaming=True  # Streaming အဓိက Feature
+                supports_streaming=True
             )
 
             await bot.send_file(
@@ -223,7 +196,7 @@ async def process_media_message(msg, status_msg=None):
                 formatting_entities=original_entities,
                 thumb=thumb_path if (thumb_path and os.path.exists(thumb_path)) else None,
                 attributes=[video_attribute],
-                force_document=False  # Video တန်းဖြစ်စေရန် Document မဟုတ်ဘဲ တင်မည်
+                force_document=False
             )
         else:
             await bot.send_file(
@@ -251,7 +224,6 @@ async def process_media_message(msg, status_msg=None):
         return False
 
     finally:
-        # Cache ရှင်းထုတ်ခြင်း
         for p in [downloaded_path, thumb_path]:
             if p and os.path.exists(p):
                 try:
@@ -259,7 +231,7 @@ async def process_media_message(msg, status_msg=None):
                 except Exception:
                     pass
 
-# --- 4. ALBUM (MEDIA GROUP) PROCESSOR ---
+# --- ALBUM PROCESSOR ---
 async def process_album_group(grouped_id):
     if grouped_id in ALBUM_LOCKS:
         return
@@ -301,7 +273,7 @@ async def process_album_group(grouped_id):
     except Exception as e:
         logging.error(f"Album Error: {e}")
 
-# --- 5. COMMAND HANDLERS ---
+# --- COMMANDS ---
 def auth_check(func):
     async def wrapper(event):
         if not is_authorized(event.sender_id):
@@ -398,7 +370,7 @@ async def toggle_system(event):
     state = "ONLINE 🟢" if db["system_active"] else "PAUSED 🔴"
     await event.respond(f"🔄 **Engine State:** `{state}`")
 
-# --- 6. REAL-TIME EVENT LISTENER ---
+# --- REAL-TIME EVENT INTERCEPTOR ---
 @bot.on(events.NewMessage())
 async def message_interceptor(event):
     if not db.get("system_active", True):
@@ -437,13 +409,11 @@ async def message_interceptor(event):
                 await process_media_message(event.message, status_msg)
 
     except errors.FloodWaitError as flood_err:
-        wait_time = flood_err.seconds
-        logging.warning(f"FloodWait Warning: Waiting {wait_time}s")
-        await asyncio.sleep(wait_time)
+        await asyncio.sleep(flood_err.seconds)
     except Exception as outer_err:
         logging.error(f"Interceptor Error: {outer_err}")
 
-# --- 7. MAIN EXECUTION LOOP ---
+# --- MAIN ENGINE LOOP ---
 async def main():
     if SESSION_STRING:
         await bot.start()
