@@ -11,6 +11,7 @@ from collections import defaultdict
 from telethon import TelegramClient, events, errors
 from telethon.sessions import StringSession
 from telethon.tl.types import DocumentAttributeVideo
+from telethon.utils import get_peer_id
 
 # --- 1. LOGGING & CONFIGURATION ---
 logging.basicConfig(
@@ -32,7 +33,7 @@ TEMP_DIR = "fast_cache"
 ALBUM_BUFFERS = defaultdict(list)
 ALBUM_LOCKS = set()
 
-# Global Real-time Task Monitor State
+# Real-time Task Monitor State
 CURRENT_TASK = {
     "action": "Idle (စောင့်ဆိုင်းနေသည်)",
     "file": "-",
@@ -42,7 +43,7 @@ CURRENT_TASK = {
     "source": "-"
 }
 
-# --- DATABASE MANAGEMENT ---
+# --- 2. DATABASE MANAGEMENT ---
 def load_database():
     if os.path.exists(DB_FILE):
         try:
@@ -79,7 +80,7 @@ if SESSION_STRING:
 else:
     bot = TelegramClient('bot_session', API_ID, API_HASH)
 
-# --- 2. UTILITY & HELPER FUNCTIONS ---
+# --- 3. UTILITY & HELPER FUNCTIONS ---
 def is_authorized(user_id):
     if not ADMIN_IDS:
         return True
@@ -111,7 +112,6 @@ def human_readable_time(seconds):
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 def generate_clean_thumbnail(video_path, output_thumb_path):
-    """FFmpeg သုံး၍ ဗီဒီယို၏ ၂ စက္ကန့်မြောက် Frame မှ Thumbnail ထုတ်ယူခြင်း"""
     try:
         command = [
             'ffmpeg', '-y',
@@ -129,7 +129,6 @@ def generate_clean_thumbnail(video_path, output_thumb_path):
     return None
 
 def get_video_metadata(video_path):
-    """FFprobe သုံး၍ Metadata ယူခြင်း"""
     duration, width, height = 0, 1280, 720
     try:
         cmd = [
@@ -168,7 +167,7 @@ def reset_current_task():
         "source": "-"
     }
 
-# --- 3. PROGRESS TRACKER CLASS ---
+# --- 4. PROGRESS TRACKER CLASS ---
 class ProgressTracker:
     def __init__(self, action_name, message, file_name, source_info="Unknown"):
         self.action_name = action_name
@@ -180,7 +179,6 @@ class ProgressTracker:
 
     async def callback(self, current, total):
         now = time.time()
-        # Rate limit updates to once every 2.5 seconds to prevent FloodWait
         if now - self.last_update_time < 2.5 and current != total:
             return
 
@@ -220,12 +218,12 @@ class ProgressTracker:
         except Exception:
             pass
 
-# --- 4. MEDIA PROCESSOR ---
+# --- 5. MEDIA PROCESSOR ---
 async def process_media_message(msg, status_msg=None, source_info="Unknown"):
     target = db.get("target_channel")
     if not target:
         if status_msg:
-            await status_msg.edit("⚠️ Target Channel မသတ်မှတ်ရသေးပါ။ `/settarget` သုံးပါ။")
+            await status_msg.edit("⚠️ Target Channel/Group မသတ်မှတ်ရသေးပါ။ `/settarget` သုံးပါ။")
         return False
 
     media_key = get_media_key(msg)
@@ -350,50 +348,7 @@ async def process_media_message(msg, status_msg=None, source_info="Unknown"):
                 except Exception:
                     pass
 
-# --- 5. ALBUM PROCESSOR ---
-async def process_album_group(grouped_id):
-    if grouped_id in ALBUM_LOCKS:
-        return
-    ALBUM_LOCKS.add(grouped_id)
-    await asyncio.sleep(2)
-
-    messages = ALBUM_BUFFERS.pop(grouped_id, [])
-    ALBUM_LOCKS.discard(grouped_id)
-
-    if not messages:
-        return
-
-    messages.sort(key=lambda x: x.id)
-    target = db.get("target_channel")
-    if not target:
-        return
-
-    album_caption = ""
-    album_entities = None
-    for m in messages:
-        if m.text:
-            album_caption = m.text
-            album_entities = m.entities
-            break
-
-    try:
-        await bot.send_file(
-            target,
-            [m.media for m in messages if m.media],
-            caption=album_caption,
-            formatting_entities=album_entities
-        )
-        for m in messages:
-            k = get_media_key(m)
-            if k and k not in db.get("processed_ids", []):
-                db["processed_ids"].append(k)
-        db["total_processed_files"] = db.get("total_processed_files", 0) + len(messages)
-        save_database(db)
-        await dispatch_log(f"✅ **ALBUM COPIED:** {len(messages)} items.", "INFO")
-    except Exception as e:
-        logging.error(f"Album Error: {e}")
-
-# --- 6. COMMAND HANDLERS ---
+# --- 6. COMMAND HANDLERS & HISTORY BACKFILL ---
 def auth_check(func):
     async def wrapper(event):
         if not is_authorized(event.sender_id):
@@ -401,6 +356,73 @@ def auth_check(func):
             return
         await func(event)
     return wrapper
+
+# 🔥 အဟောင်းများ အကုန် လိုက်ကူးပေးမည့် FEATURE
+@bot.on(events.NewMessage(pattern=r'(?i)^[./](cloneold|copyall)(?:\s+(.+))?$'))
+@auth_check
+async def clone_old_history(event):
+    target = db.get("target_channel")
+    if not target:
+        await event.respond("⚠️ **Target Channel/Group မသတ်မှတ်ရသေးပါ။** `/settarget` အရင်လုပ်ပါ။")
+        return
+
+    arg = event.pattern_match.group(2)
+    sources_to_clone = []
+
+    if arg:
+        sources_to_clone.append(arg.strip())
+    else:
+        sources_to_clone = db.get("sources", [])
+
+    if not sources_to_clone:
+        await event.respond("⚠️ **Source မရှိသေးပါ။** `/addsource` ဖြင့် Source အရင်ထည့်ပါ သို့မဟုတ် `/copyall <Source_ID>` ဟု ရိုက်ထည့်ပါ။")
+        return
+
+    status_msg = await event.respond("⏳ **ယခင် တက်ခဲ့ပြီးသား Media အဟောင်းများကို စတင် ရှာဖွေနေပါသည်...**")
+
+    for src in sources_to_clone:
+        try:
+            entity_arg = int(src) if str(src).lstrip('-').isdigit() else src
+            entity = await bot.get_entity(entity_arg)
+            title = getattr(entity, 'title', getattr(entity, 'first_name', 'Source'))
+
+            await status_msg.edit(f"🔍 **`{title}` မှ မက်ဆေ့ချ် အဟောင်းများကို စစ်ဆေးနေပါသည်...**")
+
+            scanned_count = 0
+            copied_count = 0
+
+            # reverse=True ကြောင့် အဟောင်းဆုံး မက်ဆေ့ချ်မှ အသစ်ဆုံး မက်ဆေ့ချ်သို့ စီ၍ ကူးပေးမည်
+            async for message in bot.iter_messages(entity, reverse=True):
+                scanned_count += 1
+
+                if message.video or message.photo or message.document:
+                    media_key = get_media_key(message)
+
+                    # ကူးပြီးသား ဖိုင်ဖြစ်ပါက ကျော်မည်
+                    if media_key and media_key in db.get("processed_ids", []):
+                        continue
+
+                    # Message တစ်ခုချင်းစီကို Process လုပ်ခြင်း
+                    progress_info = f"`{title}` (Scanned: {scanned_count} | Copied: {copied_count})"
+                    task_msg = await event.respond(f"📦 **အဟောင်းများ ကူးယူနေပါသည်:** {progress_info}")
+                    
+                    success = await process_media_message(message, task_msg, source_info=title)
+                    if success:
+                        copied_count += 1
+
+                    # Telegram FloodWait မမိစေရန် ၁ စက္ကန့် နားမည်
+                    await asyncio.sleep(1)
+
+            await event.respond(f"✅ **`{title}` ၏ အဟောင်းများ ကူးယူခြင်း ပြီးစီးပါပြီ!**\n📊 Total Copied: `{copied_count}` items")
+
+        except errors.FloodWaitError as flood:
+            await event.respond(f"⏳ **Telegram Rate Limit ကြောင့် {flood.seconds} စက္ကန့် စောင့်ဆိုင်းနေပါသည်...**")
+            await asyncio.sleep(flood.seconds)
+        except Exception as e:
+            logging.error(f"Clone History Error for {src}: {e}")
+            await event.respond(f"❌ **Error copying history from `{src}`:** `{str(e)}`")
+
+    await status_msg.edit("🎉 **သတ်မှတ်ထားသော Source များမှ မက်ဆေ့ချ် အဟောင်းများ အားလုံး ကူးယူပြီးပါပြီ။**")
 
 @bot.on(events.NewMessage(pattern=r'(?i)^[./]ping$'))
 @auth_check
@@ -435,25 +457,26 @@ async def dashboard_command(event):
     total, used, free = shutil.disk_usage(".")
 
     panel_text = (
-        "💎 **CHANNEL CLONER BOT (REAL-TIME MONITOR)**\n"
+        "💎 **CHANNEL & GROUP CLONER BOT**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🟢 **Engine State:** `{'ONLINE (ACTIVE)' if db.get('system_active') else 'PAUSED 🔴'}`\n"
         f"⚙️ **Current Action:** `{CURRENT_TASK['action']}`\n"
-        f"🎯 **Target Channel:** `{db.get('target_channel') or 'Not Configured'}`\n"
+        f"🎯 **Target Channel/Group:** `{db.get('target_channel') or 'Not Configured'}`\n"
         f"🛡 **Log Channel:** `{db.get('log_channel') or 'Not Configured'}`\n"
-        f"📡 **Active Sources:** `{len(db.get('sources', []))}` channels\n"
+        f"📡 **Active Sources:** `{len(db.get('sources', []))}` active\n"
         f"📦 **Total Processed:** `{db.get('total_processed_files', 0)}` items\n"
         f"💾 **Free Disk Space:** `{human_readable_size(free)}` / `{human_readable_size(total)}`\n"
         f"⏱ **System Uptime:** `{hrs}h {mins}m {secs}s`\n\n"
         "**Available Commands:**\n"
-        "• `/live` - လက်ရှိ ဘာလုပ်နေလဲ အသေးစိတ်ကြည့်ရန်\n"
-        "• `/ping` - Bot အလုပ်လုပ်နေဆဲလား စစ်ရန်\n"
-        "• `/addsource <ID>` - Source ထည့်ရန်\n"
-        "• `/settarget <ID>` - Target သတ်မှတ်ရန်\n"
-        "• `/setlog <ID>` - Log Channel သတ်မှတ်ရန်\n"
+        "• `/copyall` - Source ထဲရှိ **အဟောင်းများ အားလုံး** လိုက်ကူးရန်\n"
+        "• `/addsource <Link/ID>` - Source ထည့်ရန် (Name ပြပေးမည်)\n"
+        "• `/settarget <Link/ID>` - Target သတ်မှတ်ရန်\n"
+        "• `/setlog <Link/ID>` - Log Channel သတ်မှတ်ရန်\n"
+        "• `/live` - လက်ရှိ ဘာလုပ်နေလဲ ကြည့်ရန်\n"
+        "• `/ping` - Bot စစ်ရန်\n"
         "• `/delsource <ID>` - Source ဖျက်ရန်\n"
         "• `/sources` - Source စာရင်းကြည့်ရန်\n"
-        "• `/toggle` - Bot ဖွင့်/ပိတ် ပြုလုပ်ရန်"
+        "• `/toggle` - Bot ဖွင့်/ပိတ် လုပ်ရန်"
     )
     await event.respond(panel_text)
 
@@ -461,10 +484,21 @@ async def dashboard_command(event):
 @auth_check
 async def set_target(event):
     val = event.pattern_match.group(1).strip()
-    target = int(val) if val.lstrip('-').isdigit() else val
-    db["target_channel"] = target
-    save_database(db)
-    await event.respond(f"✅ **Target Channel Updated:** `{target}`")
+    status_msg = await event.respond("🔍 **Target Group/Channel အချက်အလက် စစ်ဆေးနေပါသည်...**")
+    try:
+        entity = await bot.get_entity(int(val) if val.lstrip('-').isdigit() else val)
+        peer_id = get_peer_id(entity)
+        title = getattr(entity, 'title', getattr(entity, 'first_name', 'Unknown Name'))
+        
+        db["target_channel"] = peer_id
+        save_database(db)
+        await status_msg.edit(f"✅ **TARGET SET SUCCESSFULLY!**\n📌 **အမည်:** `{title}`\n🆔 **ID:** `{peer_id}`")
+        await dispatch_log(f"🎯 **Target Set:** **{title}** (`{peer_id}`)", "INFO")
+    except Exception as e:
+        target = int(val) if val.lstrip('-').isdigit() else val
+        db["target_channel"] = target
+        save_database(db)
+        await status_msg.edit(f"✅ **Target Channel Updated:** `{target}`")
 
 @bot.on(events.NewMessage(pattern=r'(?i)^[./]setlog (.+)'))
 @auth_check
@@ -480,17 +514,40 @@ async def set_log(event):
 @auth_check
 async def add_source(event):
     src_raw = event.pattern_match.group(1).strip()
-    src_str = src_raw
-    if src_raw.lstrip('-').isdigit():
-        src_str = str(int(src_raw))
+    status_msg = await event.respond("🔍 **Source Group/Channel အချက်အလက် စစ်ဆေးနေပါသည်...**")
 
-    if src_str not in db["sources"]:
-        db["sources"].append(src_str)
-        save_database(db)
-        await event.respond(f"✅ **Source Added Successfully:** `{src_str}`")
-        await dispatch_log(f"📡 New Source Added: `{src_str}`", "INFO")
-    else:
-        await event.respond("⚠️ ဒီ Source က စာရင်းထဲတွင် ရှိပြီးသား ဖြစ်ပါသည်။")
+    try:
+        entity_arg = int(src_raw) if src_raw.lstrip('-').isdigit() else src_raw
+        entity = await bot.get_entity(entity_arg)
+        
+        peer_id = str(get_peer_id(entity))
+        title = getattr(entity, 'title', getattr(entity, 'first_name', 'Unknown Name'))
+        username = f"@{entity.username}" if getattr(entity, 'username', None) else "Private Group/Channel"
+
+        if peer_id not in db["sources"]:
+            db["sources"].append(peer_id)
+            save_database(db)
+            
+            success_text = (
+                "✅ **SOURCE ADDED SUCCESSFULLY!**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📌 **အမည် (Name):** `{title}`\n"
+                f"🆔 **ID:** `{peer_id}`\n"
+                f"🔗 **Username/Link:** `{username}`\n\n"
+                "⚡ *ဒီ Group/Channel မှာ တက်လာသမျှ ဖိုင်များကို စတင် စောင့်ကြည့် ကူးယူပေးနေပါပြီ။*\n"
+                "👉 *အဟောင်းများကိုပါ အကုန်ကူးလိုပါက `/copyall` ဟု ရိုက်ထည့်ပါ။*"
+            )
+            await status_msg.edit(success_text)
+            await dispatch_log(f"📡 **New Source Added:** **{title}** (`{peer_id}`)", "INFO")
+        else:
+            await status_msg.edit(f"⚠️ **{title}** (`{peer_id}`) သည် စာရင်းထဲတွင် ရှိပြီးသား ဖြစ်ပါသည်။")
+
+    except Exception as e:
+        await status_msg.edit(
+            f"❌ **Source ရှာမတွေ့ပါ။**\n"
+            f"ID သို့မဟုတ် Link မှန်မမှန် ပြန်စစ်ပါ။\n\n"
+            f"Error Details: `{str(e)}`"
+        )
 
 @bot.on(events.NewMessage(pattern=r'(?i)^[./]delsource (.+)'))
 @auth_check
@@ -539,11 +596,12 @@ async def message_interceptor(event):
         if not chat:
             return
 
+        chat_peer_id = str(get_peer_id(chat))
         chat_id = str(chat.id)
         username = f"@{chat.username.lower()}" if chat.username else None
 
         is_matched = any(
-            str(s).lower() == chat_id or (username and str(s).lower() == username)
+            str(s) == chat_peer_id or str(s) == chat_id or (username and str(s).lower() == username)
             for s in sources
         )
 
@@ -552,7 +610,7 @@ async def message_interceptor(event):
             if media_key and media_key in db.get("processed_ids", []):
                 return
 
-            source_name = username or chat_id
+            source_name = getattr(chat, 'title', username or chat_id)
 
             if event.grouped_id:
                 gid = event.grouped_id
@@ -574,8 +632,8 @@ async def main():
     else:
         await bot.start(bot_token=BOT_TOKEN)
         
-    logging.info("⚡ TELEGRAM CHANNEL CLONER BOT IS ONLINE ⚡")
-    await dispatch_log("🚀 **Bot System Successfully Started and Running 24/7!**", "INFO")
+    logging.info("⚡ TELEGRAM CHANNEL & GROUP CLONER IS ONLINE ⚡")
+    await dispatch_log("🚀 **Bot System Started & Running 24/7!**", "INFO")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
