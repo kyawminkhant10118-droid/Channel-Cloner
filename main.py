@@ -12,7 +12,7 @@ from telethon import TelegramClient, events, errors
 from telethon.sessions import StringSession
 from telethon.tl.types import DocumentAttributeVideo
 
-# --- LOGGING & CONFIGURATION ---
+# --- 1. LOGGING & CONFIGURATION ---
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] [%(levelname)s] — %(message)s',
@@ -31,6 +31,16 @@ TEMP_DIR = "fast_cache"
 
 ALBUM_BUFFERS = defaultdict(list)
 ALBUM_LOCKS = set()
+
+# Global Real-time Task Monitor State
+CURRENT_TASK = {
+    "action": "Idle (စောင့်ဆိုင်းနေသည်)",
+    "file": "-",
+    "percentage": "0%",
+    "speed": "0 KB/s",
+    "eta": "00:00:00",
+    "source": "-"
+}
 
 # --- DATABASE MANAGEMENT ---
 def load_database():
@@ -69,7 +79,7 @@ if SESSION_STRING:
 else:
     bot = TelegramClient('bot_session', API_ID, API_HASH)
 
-# --- UTILITIES ---
+# --- 2. UTILITY & HELPER FUNCTIONS ---
 def is_authorized(user_id):
     if not ADMIN_IDS:
         return True
@@ -84,8 +94,24 @@ def get_media_key(msg):
         return f"photo_{msg.media.photo.id}"
     return f"msg_{msg.chat_id}_{msg.id}"
 
+def human_readable_size(size_in_bytes):
+    if size_in_bytes == 0:
+        return "0 B"
+    size_name = ("B", "KB", "MB", "GB", "TB")
+    i = int(math.floor(math.log(size_in_bytes, 1024)))
+    p = math.pow(1024, i)
+    s = round(size_in_bytes / p, 2)
+    return f"{s} {size_name[i]}"
+
+def human_readable_time(seconds):
+    if seconds <= 0:
+        return "00:00:00"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
 def generate_clean_thumbnail(video_path, output_thumb_path):
-    """FFmpeg သုံး၍ ဗီဒီယို၏ ၂ စက္ကန့်မြောက် Frame မှ Thumbnail ထုတ်ယူခြင်း (အဖြူရောင်ဖြစ်ခြင်းမှ ကာကွယ်ရန်)"""
+    """FFmpeg သုံး၍ ဗီဒီယို၏ ၂ စက္ကန့်မြောက် Frame မှ Thumbnail ထုတ်ယူခြင်း"""
     try:
         command = [
             'ffmpeg', '-y',
@@ -99,11 +125,11 @@ def generate_clean_thumbnail(video_path, output_thumb_path):
         if os.path.exists(output_thumb_path) and os.path.getsize(output_thumb_path) > 0:
             return output_thumb_path
     except Exception as e:
-        logging.warning(f"FFmpeg Thumbnail Error: {e}")
+        logging.warning(f"FFmpeg Thumbnail Warning: {e}")
     return None
 
 def get_video_metadata(video_path):
-    """FFprobe သုံး၍ Duration, Width, Height ကို ယူခြင်း"""
+    """FFprobe သုံး၍ Metadata ယူခြင်း"""
     duration, width, height = 0, 1280, 720
     try:
         cmd = [
@@ -122,8 +148,80 @@ def get_video_metadata(video_path):
         logging.warning(f"FFprobe Metadata Error: {e}")
     return duration, width, height
 
-# --- MEDIA PROCESSOR ---
-async def process_media_message(msg, status_msg=None):
+async def dispatch_log(log_msg, level="INFO"):
+    log_chat_id = db.get("log_channel")
+    if log_chat_id:
+        try:
+            icon = "🟢" if level == "INFO" else "❌" if level == "ERROR" else "⚠️"
+            await bot.send_message(log_chat_id, f"{icon} **SYSTEM LOG [{level}]**\n{log_msg}")
+        except Exception as e:
+            logging.error(f"Log Dispatch Failed: {e}")
+
+def reset_current_task():
+    global CURRENT_TASK
+    CURRENT_TASK = {
+        "action": "Idle (စောင့်ဆိုင်းနေသည်)",
+        "file": "-",
+        "percentage": "0%",
+        "speed": "0 KB/s",
+        "eta": "00:00:00",
+        "source": "-"
+    }
+
+# --- 3. PROGRESS TRACKER CLASS ---
+class ProgressTracker:
+    def __init__(self, action_name, message, file_name, source_info="Unknown"):
+        self.action_name = action_name
+        self.message = message
+        self.file_name = file_name
+        self.source_info = str(source_info)
+        self.start_time = time.time()
+        self.last_update_time = time.time()
+
+    async def callback(self, current, total):
+        now = time.time()
+        # Rate limit updates to once every 2.5 seconds to prevent FloodWait
+        if now - self.last_update_time < 2.5 and current != total:
+            return
+
+        self.last_update_time = now
+        elapsed = now - self.start_time
+        percentage = (current / total) * 100 if total > 0 else 0
+        speed = current / elapsed if elapsed > 0 else 0
+        eta = (total - current) / speed if speed > 0 else 0
+
+        filled_blocks = int(percentage // 10)
+        progress_bar = "█" * filled_blocks + "░" * (10 - filled_blocks)
+
+        global CURRENT_TASK
+        CURRENT_TASK = {
+            "action": self.action_name,
+            "file": self.file_name,
+            "percentage": f"{percentage:.1f}%",
+            "speed": f"{human_readable_size(speed)}/s",
+            "eta": human_readable_time(eta),
+            "source": self.source_info
+        }
+
+        status_text = (
+            f"⚡ **{self.action_name.upper()} IN PROGRESS**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📍 **Source:** `{self.source_info}`\n"
+            f"📁 **File:** `{self.file_name}`\n"
+            f"📊 **Progress:** `[{progress_bar}] {percentage:.1f}%`\n"
+            f"🚀 **Speed:** `{human_readable_size(speed)}/s`\n"
+            f"📦 **Size:** `{human_readable_size(current)} / {human_readable_size(total)}`\n"
+            f"⏱ **ETA:** `{human_readable_time(eta)}`"
+        )
+
+        try:
+            if self.message:
+                await self.message.edit(status_text)
+        except Exception:
+            pass
+
+# --- 4. MEDIA PROCESSOR ---
+async def process_media_message(msg, status_msg=None, source_info="Unknown"):
     target = db.get("target_channel")
     if not target:
         if status_msg:
@@ -134,7 +232,7 @@ async def process_media_message(msg, status_msg=None):
     original_caption = msg.text or ""
     original_entities = msg.entities
 
-    # Direct Transfer စမ်းသပ်ခြင်း
+    # Direct Copy
     try:
         if status_msg:
             await status_msg.edit("⚡ **Direct Copy စတင်နေပါသည်...**")
@@ -151,33 +249,47 @@ async def process_media_message(msg, status_msg=None):
             db["processed_ids"].append(media_key)
         save_database(db)
 
+        await dispatch_log(f"✅ **DIRECT COPY SUCCESS:** Copied from `{source_info}`", "INFO")
+
         if status_msg:
             await status_msg.edit("✅ **DIRECT COPY SUCCESS**")
             await asyncio.sleep(1)
             await status_msg.delete()
+        reset_current_task()
         return True
 
     except Exception:
         if status_msg:
             await status_msg.edit("⚠️ **Restricted Content ဖြစ်သောကြောင့် Fast Download/Upload ပြုလုပ်နေပါသည်။**")
 
-    # Forward ပိတ်ထားသော Restricted Channel များအတွက် Download & Re-upload ပြုလုပ်ခြင်း
+    # Fast Download & Upload Fallback
     os.makedirs(TEMP_DIR, exist_ok=True)
     downloaded_path = None
     thumb_path = None
 
+    file_name = "Media_File"
+    if msg.file and msg.file.name:
+        file_name = msg.file.name
+    elif msg.video:
+        file_name = f"Video_{msg.id}.mp4"
+
     try:
-        downloaded_path = await msg.download_media(file=TEMP_DIR + "/")
+        dl_tracker = ProgressTracker("Downloading", status_msg, file_name, source_info)
+        downloaded_path = await msg.download_media(
+            file=TEMP_DIR + "/",
+            progress_callback=dl_tracker.callback
+        )
+
         if not downloaded_path or not os.path.exists(downloaded_path):
             raise Exception("Download ယူ၍ မရရှိပါ။")
+
+        file_actual_name = os.path.basename(downloaded_path)
+        ul_tracker = ProgressTracker("Uploading", status_msg, file_actual_name, source_info)
 
         file_lower = downloaded_path.lower()
         is_video = file_lower.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.m4v')) or msg.video
 
         if is_video:
-            if status_msg:
-                await status_msg.edit("🎬 **Video Streaming & Thumbnail ပြင်ဆင်နေပါသည်...**")
-
             duration, w, h = get_video_metadata(downloaded_path)
             generated_thumb = f"{downloaded_path}_thumb.jpg"
             thumb_path = generate_clean_thumbnail(downloaded_path, generated_thumb)
@@ -196,14 +308,16 @@ async def process_media_message(msg, status_msg=None):
                 formatting_entities=original_entities,
                 thumb=thumb_path if (thumb_path and os.path.exists(thumb_path)) else None,
                 attributes=[video_attribute],
-                force_document=False
+                force_document=False,
+                progress_callback=ul_tracker.callback
             )
         else:
             await bot.send_file(
                 target,
                 downloaded_path,
                 caption=original_caption,
-                formatting_entities=original_entities
+                formatting_entities=original_entities,
+                progress_callback=ul_tracker.callback
             )
 
         db["total_processed_files"] = db.get("total_processed_files", 0) + 1
@@ -211,16 +325,21 @@ async def process_media_message(msg, status_msg=None):
             db["processed_ids"].append(media_key)
         save_database(db)
 
+        await dispatch_log(f"✅ **RE-UPLOAD SUCCESS:** `{file_actual_name}` from `{source_info}`", "INFO")
+
         if status_msg:
             await status_msg.edit("✅ **SUCCESSFULLY COPIED & STREAM READY**")
             await asyncio.sleep(1)
             await status_msg.delete()
+        reset_current_task()
         return True
 
     except Exception as inner_err:
         logging.error(f"Media Task Error: {inner_err}\n{traceback.format_exc()}")
+        await dispatch_log(f"❌ **TASK FAILED:** `{str(inner_err)}`", "ERROR")
         if status_msg:
             await status_msg.edit(f"❌ **Task Failed:** `{str(inner_err)}`")
+        reset_current_task()
         return False
 
     finally:
@@ -231,7 +350,7 @@ async def process_media_message(msg, status_msg=None):
                 except Exception:
                     pass
 
-# --- ALBUM PROCESSOR ---
+# --- 5. ALBUM PROCESSOR ---
 async def process_album_group(grouped_id):
     if grouped_id in ALBUM_LOCKS:
         return
@@ -270,10 +389,11 @@ async def process_album_group(grouped_id):
                 db["processed_ids"].append(k)
         db["total_processed_files"] = db.get("total_processed_files", 0) + len(messages)
         save_database(db)
+        await dispatch_log(f"✅ **ALBUM COPIED:** {len(messages)} items.", "INFO")
     except Exception as e:
         logging.error(f"Album Error: {e}")
 
-# --- COMMANDS ---
+# --- 6. COMMAND HANDLERS ---
 def auth_check(func):
     async def wrapper(event):
         if not is_authorized(event.sender_id):
@@ -282,23 +402,52 @@ def auth_check(func):
         await func(event)
     return wrapper
 
-@bot.on(events.NewMessage(pattern=r'(?i)^[./](start|help|dashboard)$'))
+@bot.on(events.NewMessage(pattern=r'(?i)^[./]ping$'))
+@auth_check
+async def ping_command(event):
+    start = time.time()
+    msg = await event.respond("🏓 **Pinging System...**")
+    delta = round((time.time() - start) * 1000, 2)
+    await msg.edit(f"🏓 **PONG!**\n⚡ **Latency:** `{delta} ms`\n🟢 **Engine State:** `Running 24/7`")
+
+@bot.on(events.NewMessage(pattern=r'(?i)^[./](live|activity|task)$'))
+@auth_check
+async def live_task_command(event):
+    report = (
+        "📊 **LIVE BOT ACTIVITY MONITOR**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚙️ **Status:** `{CURRENT_TASK['action']}`\n"
+        f"📍 **Source:** `{CURRENT_TASK['source']}`\n"
+        f"📁 **File:** `{CURRENT_TASK['file']}`\n"
+        f"📊 **Progress:** `{CURRENT_TASK['percentage']}`\n"
+        f"🚀 **Speed:** `{CURRENT_TASK['speed']}`\n"
+        f"⏱ **ETA:** `{CURRENT_TASK['eta']}`\n"
+    )
+    await event.respond(report)
+
+@bot.on(events.NewMessage(pattern=r'(?i)^[./](start|help|dashboard|status)$'))
 @auth_check
 async def dashboard_command(event):
     uptime_sec = int(time.time() - system_boot_time)
     hrs, rem = divmod(uptime_sec, 3600)
     mins, secs = divmod(rem, 60)
 
+    total, used, free = shutil.disk_usage(".")
+
     panel_text = (
-        "💎 **CHANNEL CLONER BOT (SPEED & STREAM OPTIMIZED)**\n"
+        "💎 **CHANNEL CLONER BOT (REAL-TIME MONITOR)**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 Target Channel: `{db.get('target_channel') or 'Not Configured'}`\n"
-        f"🛡 Log Channel: `{db.get('log_channel') or 'Not Configured'}`\n"
-        f"📡 Active Sources: `{len(db.get('sources', []))}` active\n"
-        f"⚙️ Engine Status: `{'ONLINE 🟢' if db.get('system_active') else 'PAUSED 🔴'}`\n"
-        f"📦 Total Processed: `{db.get('total_processed_files', 0)}` items\n"
-        f"⏱ System Uptime: `{hrs}h {mins}m {secs}s`\n\n"
-        "**Commands:**\n"
+        f"🟢 **Engine State:** `{'ONLINE (ACTIVE)' if db.get('system_active') else 'PAUSED 🔴'}`\n"
+        f"⚙️ **Current Action:** `{CURRENT_TASK['action']}`\n"
+        f"🎯 **Target Channel:** `{db.get('target_channel') or 'Not Configured'}`\n"
+        f"🛡 **Log Channel:** `{db.get('log_channel') or 'Not Configured'}`\n"
+        f"📡 **Active Sources:** `{len(db.get('sources', []))}` channels\n"
+        f"📦 **Total Processed:** `{db.get('total_processed_files', 0)}` items\n"
+        f"💾 **Free Disk Space:** `{human_readable_size(free)}` / `{human_readable_size(total)}`\n"
+        f"⏱ **System Uptime:** `{hrs}h {mins}m {secs}s`\n\n"
+        "**Available Commands:**\n"
+        "• `/live` - လက်ရှိ ဘာလုပ်နေလဲ အသေးစိတ်ကြည့်ရန်\n"
+        "• `/ping` - Bot အလုပ်လုပ်နေဆဲလား စစ်ရန်\n"
         "• `/addsource <ID>` - Source ထည့်ရန်\n"
         "• `/settarget <ID>` - Target သတ်မှတ်ရန်\n"
         "• `/setlog <ID>` - Log Channel သတ်မှတ်ရန်\n"
@@ -325,6 +474,7 @@ async def set_log(event):
     db["log_channel"] = log_id
     save_database(db)
     await event.respond(f"✅ **Log Channel Updated:** `{log_id}`")
+    await dispatch_log("Log channel configured successfully.", "INFO")
 
 @bot.on(events.NewMessage(pattern=r'(?i)^[./]addsource (.+)'))
 @auth_check
@@ -338,6 +488,7 @@ async def add_source(event):
         db["sources"].append(src_str)
         save_database(db)
         await event.respond(f"✅ **Source Added Successfully:** `{src_str}`")
+        await dispatch_log(f"📡 New Source Added: `{src_str}`", "INFO")
     else:
         await event.respond("⚠️ ဒီ Source က စာရင်းထဲတွင် ရှိပြီးသား ဖြစ်ပါသည်။")
 
@@ -349,6 +500,7 @@ async def del_source(event):
         db["sources"].remove(src)
         save_database(db)
         await event.respond(f"🗑 **Source Removed:** `{src}`")
+        await dispatch_log(f"🗑 Source Removed: `{src}`", "INFO")
 
 @bot.on(events.NewMessage(pattern=r'(?i)^[./]sources$'))
 @auth_check
@@ -370,7 +522,7 @@ async def toggle_system(event):
     state = "ONLINE 🟢" if db["system_active"] else "PAUSED 🔴"
     await event.respond(f"🔄 **Engine State:** `{state}`")
 
-# --- REAL-TIME EVENT INTERCEPTOR ---
+# --- 7. REAL-TIME EVENT INTERCEPTOR ---
 @bot.on(events.NewMessage())
 async def message_interceptor(event):
     if not db.get("system_active", True):
@@ -400,20 +552,22 @@ async def message_interceptor(event):
             if media_key and media_key in db.get("processed_ids", []):
                 return
 
+            source_name = username or chat_id
+
             if event.grouped_id:
                 gid = event.grouped_id
                 ALBUM_BUFFERS[gid].append(event.message)
                 asyncio.create_task(process_album_group(gid))
             else:
-                status_msg = await event.respond("💎 **New Media Detected! Copying...**")
-                await process_media_message(event.message, status_msg)
+                status_msg = await event.respond("💎 **New Media Detected! Processing...**")
+                await process_media_message(event.message, status_msg, source_info=source_name)
 
     except errors.FloodWaitError as flood_err:
         await asyncio.sleep(flood_err.seconds)
     except Exception as outer_err:
         logging.error(f"Interceptor Error: {outer_err}")
 
-# --- MAIN ENGINE LOOP ---
+# --- 8. MAIN ENGINE LOOP ---
 async def main():
     if SESSION_STRING:
         await bot.start()
@@ -421,6 +575,7 @@ async def main():
         await bot.start(bot_token=BOT_TOKEN)
         
     logging.info("⚡ TELEGRAM CHANNEL CLONER BOT IS ONLINE ⚡")
+    await dispatch_log("🚀 **Bot System Successfully Started and Running 24/7!**", "INFO")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
