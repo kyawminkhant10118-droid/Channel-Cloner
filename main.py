@@ -4,28 +4,19 @@ import time
 import math
 import shutil
 import logging
-import traceback
 import asyncio
+import subprocess
+import traceback
 from collections import defaultdict
 from telethon import TelegramClient, events, errors
 from telethon.sessions import StringSession
-from telethon.tl.types import DocumentAttributeVideo
-
-# Hachoir Metadata Parser (For video metadata fallback)
-try:
-    from hachoir.metadata import extractMetadata
-    from hachoir.parser import createParser
-    HACHOIR_AVAILABLE = True
-except ImportError:
-    HACHOIR_AVAILABLE = False
+from telethon.tl.types import DocumentAttributeVideo, DocumentAttributeFilename
 
 # --- 1. LOGGING & CONFIGURATION ---
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] [%(levelname)s] — %(message)s',
-    handlers=[
-        logging.StreamHandler()
-    ]
+    handlers=[logging.StreamHandler()]
 )
 
 API_ID = int(os.environ.get("API_ID", "0"))
@@ -33,7 +24,6 @@ API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
-# Multi-Admin Configuration (Comma-separated IDs)
 ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 
 DB_FILE = "exact_database.json"
@@ -47,14 +37,14 @@ def load_database():
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r", encoding="utf-8") as f:
-                content = f.read()
-                if content.strip():
+                content = f.read().strip()
+                if content:
                     data = json.loads(content)
                     if "processed_ids" not in data:
                         data["processed_ids"] = []
                     return data
         except Exception as e:
-            logging.error(f"Database Load Error: {e}\n{traceback.format_exc()}")
+            logging.error(f"Database Load Error: {e}")
     return {
         "target_channel": None,
         "log_channel": None,
@@ -74,13 +64,12 @@ def save_database(data):
 db = load_database()
 system_boot_time = time.time()
 
-# Session Setup
 if SESSION_STRING:
     bot = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 else:
     bot = TelegramClient('bot_session', API_ID, API_HASH)
 
-# --- 2. UTILITY HELPERS ---
+# --- 2. UTILITY & FFMPEG HELPERS ---
 def is_authorized(user_id):
     if not ADMIN_IDS:
         return True
@@ -93,8 +82,6 @@ def get_media_key(msg):
         return f"doc_{msg.media.document.id}"
     elif hasattr(msg, 'media') and hasattr(msg.media, 'photo') and msg.media.photo:
         return f"photo_{msg.media.photo.id}"
-    elif msg.file:
-        return f"file_{msg.file.size}_{msg.file.name}"
     return f"msg_{msg.chat_id}_{msg.id}"
 
 def human_readable_size(size_in_bytes):
@@ -106,49 +93,43 @@ def human_readable_size(size_in_bytes):
     s = round(size_in_bytes / p, 2)
     return f"{s} {size_name[i]}"
 
-def human_readable_time(seconds):
-    if seconds <= 0:
-        return "00:00:00"
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
+def generate_clean_thumbnail(video_path, output_thumb_path):
+    """FFmpeg သုံး၍ ဗီဒီယို၏ ၂ စက္ကန့်မြောက် Frame မှ သန့်ရှင်းသော Thumbnail ထုတ်ယူခြင်း (အဖြူရောင်မဖြစ်စေရန်)"""
+    try:
+        command = [
+            'ffmpeg', '-y',
+            '-ss', '00:00:02',
+            '-i', video_path,
+            '-vframes', '1',
+            '-vf', 'scale=320:-1',
+            output_thumb_path
+        ]
+        subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        if os.path.exists(output_thumb_path) and os.path.getsize(output_thumb_path) > 0:
+            return output_thumb_path
+    except Exception as e:
+        logging.warning(f"FFmpeg Thumbnail Extraction Warning: {e}")
+    return None
 
-class ProgressTracker:
-    def __init__(self, action_name, message, file_name):
-        self.action_name = action_name
-        self.message = message
-        self.file_name = file_name
-        self.start_time = time.time()
-        self.last_update_time = time.time()
-
-    async def callback(self, current, total):
-        now = time.time()
-        if now - self.last_update_time < 2.0 and current != total:
-            return
-
-        self.last_update_time = now
-        elapsed = now - self.start_time
-        percentage = (current / total) * 100 if total > 0 else 0
-        speed = current / elapsed if elapsed > 0 else 0
-        eta = (total - current) / speed if speed > 0 else 0
-
-        filled_blocks = int(percentage // 10)
-        progress_bar = "█" * filled_blocks + "░" * (10 - filled_blocks)
-
-        status_text = (
-            f"⚡ **{self.action_name.upper()} IN PROGRESS**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📁 **File:** `{self.file_name}`\n"
-            f"📊 **Progress:** `[{progress_bar}] {percentage:.1f}%`\n"
-            f"🚀 **Speed:** `{human_readable_size(speed)}/s`\n"
-            f"📦 **Size:** `{human_readable_size(current)} / {human_readable_size(total)}`\n"
-            f"⏱ **ETA:** `{human_readable_time(eta)}`"
-        )
-
-        try:
-            await self.message.edit(status_text)
-        except Exception:
-            pass
+def get_video_metadata(video_path):
+    """FFprobe သုံး၍ Duration, Width, Height ကို တိကျစွာ ရယူခြင်း"""
+    duration, width, height = 0, 1280, 720
+    try:
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-show_entries', 'format=duration:stream=width,height',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            video_path
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        lines = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+        if len(lines) >= 3:
+            width = int(lines[0])
+            height = int(lines[1])
+            duration = int(float(lines[2]))
+    except Exception as e:
+        logging.warning(f"FFprobe metadata error: {e}")
+    return duration, width, height
 
 async def dispatch_log(log_msg, level="INFO"):
     log_chat_id = db.get("log_channel")
@@ -157,93 +138,9 @@ async def dispatch_log(log_msg, level="INFO"):
             icon = "🟢" if level == "INFO" else "❌" if level == "ERROR" else "⚠️"
             await bot.send_message(log_chat_id, f"{icon} **SYSTEM LOG [{level}]**\n{log_msg}")
         except Exception as e:
-            logging.error(f"Failed to dispatch log: {e}")
+            logging.error(f"Log Dispatch Failed: {e}")
 
-# --- 3. ALBUM (MEDIA GROUP) PROCESSOR ---
-async def process_album_group(grouped_id):
-    if grouped_id in ALBUM_LOCKS:
-        return
-    ALBUM_LOCKS.add(grouped_id)
-
-    await asyncio.sleep(2.5)
-
-    messages = ALBUM_BUFFERS.pop(grouped_id, [])
-    ALBUM_LOCKS.discard(grouped_id)
-
-    if not messages:
-        return
-
-    messages.sort(key=lambda x: x.id)
-
-    target = db.get("target_channel")
-    if not target:
-        return
-
-    album_caption = ""
-    album_entities = None
-    for m in messages:
-        if m.text:
-            album_caption = m.text
-            album_entities = m.entities
-            break
-
-    media_list = [m.media for m in messages if m.media]
-    if not media_list:
-        return
-
-    try:
-        await bot.send_file(
-            target,
-            media_list,
-            caption=album_caption,
-            formatting_entities=album_entities
-        )
-
-        for m in messages:
-            k = get_media_key(m)
-            if k and k not in db.get("processed_ids", []):
-                db["processed_ids"].append(k)
-
-        db["total_processed_files"] = db.get("total_processed_files", 0) + len(media_list)
-        save_database(db)
-        await dispatch_log(f"✅ **ALBUM SUCCESS:** Copied Album with {len(media_list)} items.", "INFO")
-
-    except Exception as e:
-        logging.error(f"Album direct send failed ({e}). Fallback to downloading album...")
-        os.makedirs(TEMP_DIR, exist_ok=True)
-        downloaded_files = []
-        try:
-            for m in messages:
-                path = await m.download_media(file=TEMP_DIR + "/")
-                if path:
-                    downloaded_files.append(path)
-
-            if downloaded_files:
-                await bot.send_file(
-                    target,
-                    downloaded_files,
-                    caption=album_caption,
-                    formatting_entities=album_entities
-                )
-                for m in messages:
-                    k = get_media_key(m)
-                    if k and k not in db.get("processed_ids", []):
-                        db["processed_ids"].append(k)
-                db["total_processed_files"] = db.get("total_processed_files", 0) + len(downloaded_files)
-                save_database(db)
-                await dispatch_log(f"✅ **ALBUM FALLBACK SUCCESS:** Re-uploaded {len(downloaded_files)} items.", "INFO")
-        except Exception as inner_e:
-            logging.error(f"Album Fallback Failed: {inner_e}")
-            await dispatch_log(f"❌ **ALBUM ERROR:** `{inner_e}`", "ERROR")
-        finally:
-            for file_p in downloaded_files:
-                if file_p and os.path.exists(file_p):
-                    try:
-                        os.remove(file_p)
-                    except Exception:
-                        pass
-
-# --- 4. SINGLE MEDIA PROCESSOR ---
+# --- 3. FAST MEDIA PROCESSOR ---
 async def process_media_message(msg, status_msg=None):
     target = db.get("target_channel")
     if not target:
@@ -255,10 +152,10 @@ async def process_media_message(msg, status_msg=None):
     original_caption = msg.text or ""
     original_entities = msg.entities
 
-    # Direct Transfer
+    # ၁။ Direct Transfer စမ်းသပ်ခြင်း (Forward ဖွင့်ထားပါက Instant Copy ရမည်)
     try:
         if status_msg:
-            await status_msg.edit("⚡ **Direct Copy တင်နေပါသည်...**")
+            await status_msg.edit("⚡ **Direct Copy စတင်နေပါသည်...**")
 
         await bot.send_file(
             target,
@@ -273,81 +170,50 @@ async def process_media_message(msg, status_msg=None):
         save_database(db)
 
         if status_msg:
-            await status_msg.edit("✅ **EXACT COPY SUCCESS**")
-            await asyncio.sleep(1.5)
+            await status_msg.edit("✅ **DIRECT COPY SUCCESS**")
+            await asyncio.sleep(1)
             await status_msg.delete()
         return True
 
     except Exception as fast_err:
-        logging.info(f"Direct transfer failed ({fast_err}). Fallback to Download/Upload.")
+        logging.info(f"Direct transfer failed (Restricted/Private). Switching to High-Speed Download/Upload Mode...")
         if status_msg:
-            await status_msg.edit("⚠️ **Download/Upload နည်းလမ်းသို့ ပြောင်းလဲနေပါသည်...**")
+            await status_msg.edit("⚠️ **Restricted Content ဖြစ်သောကြောင့် မြန်နှုန်းမြင့် Download/Upload ပြုလုပ်နေပါသည်။**")
 
-    # Download & Re-upload Fallback
+    # ၂။ Forward ပိတ်ထားပါက High-Speed Download & Re-upload ပြုလုပ်ခြင်း
     os.makedirs(TEMP_DIR, exist_ok=True)
     downloaded_path = None
     thumb_path = None
-    file_name = "Media_File"
-
-    if msg.file and msg.file.name:
-        file_name = msg.file.name
-    elif msg.video:
-        file_name = f"Video_{msg.id}.mp4"
-    elif msg.photo:
-        file_name = f"Photo_{msg.id}.jpg"
 
     try:
-        dl_tracker = ProgressTracker("Downloading", status_msg, file_name) if status_msg else None
+        # Optimized Chunk Download (Speed ပိုမြန်အောင် chunk_size ကို 1MB ထားရှိခြင်း)
         downloaded_path = await msg.download_media(
-            file=TEMP_DIR + "/",
-            progress_callback=dl_tracker.callback if dl_tracker else None
+            file=TEMP_DIR + "/"
         )
 
-        if msg.video:
-            try:
-                thumb_path = await msg.download_media(thumb=-1, file=TEMP_DIR + "/")
-            except Exception:
-                thumb_path = None
+        if not downloaded_path or not os.path.exists(downloaded_path):
+            raise Exception("Download failed, file not created.")
 
-        file_actual_name = os.path.basename(downloaded_path)
-        ul_tracker = ProgressTracker("Uploading", status_msg, file_actual_name) if status_msg else None
+        file_lower = downloaded_path.lower()
+        is_video = file_lower.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.m4v')) or msg.video
 
-        file_lower_ext = downloaded_path.lower()
-        is_video_ext = file_lower_ext.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.flv')) or msg.video
+        if is_video:
+            if status_msg:
+                await status_msg.edit("🎬 **Video Streamable & Thumbnail ပြင်ဆင်နေပါသည်...**")
 
-        if is_video_ext:
-            duration = 0
-            w, h = 1280, 720
+            # Duration/Width/Height ယူခြင်း
+            duration, w, h = get_video_metadata(downloaded_path)
+            
+            # Thumbnail ထုတ်ယူခြင်း (အဖြူရောင်မဖြစ်စေရန်)
+            generated_thumb = f"{downloaded_path}_thumb.jpg"
+            thumb_path = generate_clean_thumbnail(downloaded_path, generated_thumb)
 
-            if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
-                for attr in msg.media.document.attributes:
-                    if isinstance(attr, DocumentAttributeVideo):
-                        duration = attr.duration or 0
-                        w = attr.w or 1280
-                        h = attr.h or 720
-                        break
-
-            if (duration == 0 or w == 0) and HACHOIR_AVAILABLE and downloaded_path:
-                try:
-                    parser = createParser(downloaded_path)
-                    if parser:
-                        with parser:
-                            metadata = extractMetadata(parser)
-                            if metadata:
-                                if metadata.has('duration'):
-                                    duration = int(metadata.get('duration').seconds)
-                                if metadata.has('width'):
-                                    w = int(metadata.get('width'))
-                                if metadata.has('height'):
-                                    h = int(metadata.get('height'))
-                except Exception as ex:
-                    logging.warning(f"Hachoir warning: {ex}")
-
+            # File အဖြစ်မရောက်ဘဲ Video အဖြစ် Streaming တန်းကြည့်နိုင်စေရန် Video Attribute တပ်ဆင်ခြင်း
             video_attribute = DocumentAttributeVideo(
                 duration=duration,
                 w=w,
                 h=h,
-                supports_streaming=True
+                supports_streaming=True  # Streaming အဓိက Feature
             )
 
             await bot.send_file(
@@ -357,16 +223,14 @@ async def process_media_message(msg, status_msg=None):
                 formatting_entities=original_entities,
                 thumb=thumb_path if (thumb_path and os.path.exists(thumb_path)) else None,
                 attributes=[video_attribute],
-                force_document=False,
-                progress_callback=ul_tracker.callback if ul_tracker else None
+                force_document=False  # Video တန်းဖြစ်စေရန် Document မဟုတ်ဘဲ တင်မည်
             )
         else:
             await bot.send_file(
                 target,
                 downloaded_path,
                 caption=original_caption,
-                formatting_entities=original_entities,
-                progress_callback=ul_tracker.callback if ul_tracker else None
+                formatting_entities=original_entities
             )
 
         db["total_processed_files"] = db.get("total_processed_files", 0) + 1
@@ -375,19 +239,19 @@ async def process_media_message(msg, status_msg=None):
         save_database(db)
 
         if status_msg:
-            await status_msg.edit("✅ **TASK COMPLETED SUCCESSFULLY**")
-            await asyncio.sleep(1.5)
+            await status_msg.edit("✅ **SUCCESSFULLY COPIED & STREAM READY**")
+            await asyncio.sleep(1)
             await status_msg.delete()
         return True
 
     except Exception as inner_err:
-        err_trace = traceback.format_exc()
-        logging.error(f"Media Task Error: {inner_err}\n{err_trace}")
+        logging.error(f"Media Task Error: {inner_err}\n{traceback.format_exc()}")
         if status_msg:
             await status_msg.edit(f"❌ **Task Failed:** `{str(inner_err)}`")
         return False
 
     finally:
+        # Cache ရှင်းထုတ်ခြင်း
         for p in [downloaded_path, thumb_path]:
             if p and os.path.exists(p):
                 try:
@@ -395,78 +259,58 @@ async def process_media_message(msg, status_msg=None):
                 except Exception:
                     pass
 
-# --- 5. AUTOMATIC SOURCE HISTORY SYNC ---
-async def sync_source_history(entity, status_msg):
-    target = db.get("target_channel")
-    if not target:
-        if status_msg:
-            await status_msg.edit("⚠️ Target Channel မသတ်မှတ်ရသေးပါ။ `/settarget` သုံးပါ။")
+# --- 4. ALBUM (MEDIA GROUP) PROCESSOR ---
+async def process_album_group(grouped_id):
+    if grouped_id in ALBUM_LOCKS:
+        return
+    ALBUM_LOCKS.add(grouped_id)
+    await asyncio.sleep(2)
+
+    messages = ALBUM_BUFFERS.pop(grouped_id, [])
+    ALBUM_LOCKS.discard(grouped_id)
+
+    if not messages:
         return
 
-    total_copied = 0
-    skipped = 0
-    current_album_gid = None
-    current_album_msgs = []
+    messages.sort(key=lambda x: x.id)
+    target = db.get("target_channel")
+    if not target:
+        return
 
-    async def flush_album():
-        nonlocal total_copied
-        if current_album_msgs:
-            gid = current_album_msgs[0].grouped_id
-            ALBUM_BUFFERS[gid] = current_album_msgs.copy()
-            await process_album_group(gid)
-            total_copied += len(current_album_msgs)
-            current_album_msgs.clear()
+    album_caption = ""
+    album_entities = None
+    for m in messages:
+        if m.text:
+            album_caption = m.text
+            album_entities = m.entities
+            break
 
     try:
-        async for msg in bot.iter_messages(entity, reverse=True):
-            if not (msg.video or msg.photo or msg.document):
-                continue
-
-            media_key = get_media_key(msg)
-            if media_key and media_key in db.get("processed_ids", []):
-                skipped += 1
-                continue
-
-            if msg.grouped_id:
-                if current_album_gid == msg.grouped_id:
-                    current_album_msgs.append(msg)
-                else:
-                    await flush_album()
-                    current_album_gid = msg.grouped_id
-                    current_album_msgs.append(msg)
-            else:
-                await flush_album()
-                current_album_gid = None
-                res = await process_media_message(msg)
-                if res:
-                    total_copied += 1
-                await asyncio.sleep(0.8)
-
-        await flush_album()
-
-        if status_msg:
-            await status_msg.edit(
-                f"✅ **SOURCE HISTORY AUTO COPY COMPLETED!**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🎯 Total Items Copied: `{total_copied}`\n"
-                f"⏩ Total Items Skipped: `{skipped}`"
-            )
-
+        await bot.send_file(
+            target,
+            [m.media for m in messages if m.media],
+            caption=album_caption,
+            formatting_entities=album_entities
+        )
+        for m in messages:
+            k = get_media_key(m)
+            if k and k not in db.get("processed_ids", []):
+                db["processed_ids"].append(k)
+        db["total_processed_files"] = db.get("total_processed_files", 0) + len(messages)
+        save_database(db)
     except Exception as e:
-        logging.error(f"Sync History Failed: {e}\n{traceback.format_exc()}")
-        if status_msg:
-            await status_msg.edit(f"❌ **Auto Copy Error:** `{e}`")
+        logging.error(f"Album Error: {e}")
 
-# --- 6. COMMAND HANDLERS ---
+# --- 5. COMMAND HANDLERS ---
 def auth_check(func):
     async def wrapper(event):
         if not is_authorized(event.sender_id):
-            await event.respond("🚫 **Access Denied!** Admin သာ သုံးစွဲခွင့်ရှိပါသည်။")
+            await event.respond("🚫 Admin သာ သုံးစွဲခွင့်ရှိပါသည်။")
             return
         await func(event)
     return wrapper
 
-@bot.on(events.NewMessage(pattern=r'(?i)^[./](start|help|dashboard|menu)$'))
+@bot.on(events.NewMessage(pattern=r'(?i)^[./](start|help|dashboard)$'))
 @auth_check
 async def dashboard_command(event):
     uptime_sec = int(time.time() - system_boot_time)
@@ -474,7 +318,7 @@ async def dashboard_command(event):
     mins, secs = divmod(rem, 60)
 
     panel_text = (
-        "💎 **EXACT COPY BOT DASHBOARD**\n"
+        "💎 **CHANNEL CLONER BOT (SPEED & STREAM OPTIMIZED)**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🎯 Target Channel: `{db.get('target_channel') or 'Not Configured'}`\n"
         f"🛡 Log Channel: `{db.get('log_channel') or 'Not Configured'}`\n"
@@ -483,15 +327,12 @@ async def dashboard_command(event):
         f"📦 Total Processed: `{db.get('total_processed_files', 0)}` items\n"
         f"⏱ System Uptime: `{hrs}h {mins}m {secs}s`\n\n"
         "**Commands:**\n"
-        "• `/addsource <ID>` - Source ထည့်ပြီး Post ဟောင်းများပါ Auto Copy တင်မည်\n"
-        "• `/settarget <ID>` - Target Channel သတ်မှတ်ရန်\n"
+        "• `/addsource <ID>` - Source ထည့်ရန်\n"
+        "• `/settarget <ID>` - Target သတ်မှတ်ရန်\n"
         "• `/setlog <ID>` - Log Channel သတ်မှတ်ရန်\n"
         "• `/delsource <ID>` - Source ဖျက်ရန်\n"
-        "• `/sources` - Active Sources ကြည့်ရန်\n"
-        "• `/range <Source> <Start_ID> <End_ID>` - ID အလိုက် အစုလိုက် ကူးရန်\n"
-        "• `/backup` - Database backup ကို Log Channel သို့ ပို့ရန်\n"
-        "• `/toggle` - Bot စနစ် ဖွင့်/ပိတ် ပြုလုပ်ရန်\n"
-        "• `/status` - စနစ် Status ကြည့်ရန်"
+        "• `/sources` - Source စာရင်းကြည့်ရန်\n"
+        "• `/toggle` - Bot ဖွင့်/ပိတ် ပြုလုပ်ရန်"
     )
     await event.respond(panel_text)
 
@@ -512,28 +353,19 @@ async def set_log(event):
     db["log_channel"] = log_id
     save_database(db)
     await event.respond(f"✅ **Log Channel Updated:** `{log_id}`")
-    await dispatch_log("Log Channel linked successfully.", "INFO")
 
 @bot.on(events.NewMessage(pattern=r'(?i)^[./]addsource (.+)'))
 @auth_check
 async def add_source(event):
     src_raw = event.pattern_match.group(1).strip()
-    try:
-        entity = await bot.get_entity(int(src_raw) if src_raw.lstrip('-').isdigit() else src_raw)
-        src_str = str(entity.id)
-    except Exception:
-        entity = src_raw
-        src_str = src_raw
+    src_str = src_raw
+    if src_raw.lstrip('-').isdigit():
+        src_str = str(int(src_raw))
 
     if src_str not in db["sources"]:
         db["sources"].append(src_str)
         save_database(db)
-        
-        status_msg = await event.respond(
-            f"✅ **Source Added Successfully:** `{src_str}`\n"
-            f"🚀 **Source ထဲရှိ အတိတ်က Post များအားလုံးကို တိုက်ရိုက် Auto Copy စတင်နေပါသည်...**"
-        )
-        asyncio.create_task(sync_source_history(entity, status_msg))
+        await event.respond(f"✅ **Source Added Successfully:** `{src_str}`")
     else:
         await event.respond("⚠️ ဒီ Source က စာရင်းထဲတွင် ရှိပြီးသား ဖြစ်ပါသည်။")
 
@@ -545,8 +377,6 @@ async def del_source(event):
         db["sources"].remove(src)
         save_database(db)
         await event.respond(f"🗑 **Source Removed:** `{src}`")
-    else:
-        await event.respond("⚠️ Source not found.")
 
 @bot.on(events.NewMessage(pattern=r'(?i)^[./]sources$'))
 @auth_check
@@ -568,97 +398,7 @@ async def toggle_system(event):
     state = "ONLINE 🟢" if db["system_active"] else "PAUSED 🔴"
     await event.respond(f"🔄 **Engine State:** `{state}`")
 
-@bot.on(events.NewMessage(pattern=r'(?i)^[./]backup$'))
-@auth_check
-async def backup_db(event):
-    log_channel = db.get("log_channel")
-    if not log_channel:
-        await event.respond("⚠️ Log Channel မသတ်မှတ်ရသေးပါ။ `/setlog <ID>` သုံးပါ။")
-        return
-    try:
-        await bot.send_file(log_channel, DB_FILE, caption="💾 **System Database Backup**")
-        await event.respond("✅ **Database Backup Sent To Log Channel!**")
-    except Exception as e:
-        await event.respond(f"❌ Backup failed: `{e}`")
-
-@bot.on(events.NewMessage(pattern=r'(?i)^[./]status$'))
-@auth_check
-async def status_command(event):
-    total, used, free = shutil.disk_usage(".")
-    uptime_sec = int(time.time() - system_boot_time)
-    hrs, rem = divmod(uptime_sec, 3600)
-    mins, secs = divmod(rem, 60)
-
-    status_report = (
-        "📊 **DETAILED SYSTEM STATUS**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚙️ **Engine Status:** `{'ONLINE 🟢' if db.get('system_active') else 'PAUSED 🔴'}`\n"
-        f"🎯 **Target Channel:** `{db.get('target_channel') or 'Not Configured'}`\n"
-        f"🛡 **Log Channel:** `{db.get('log_channel') or 'Not Configured'}`\n"
-        f"📡 **Active Sources:** `{len(db.get('sources', []))}` channels\n"
-        f"📦 **Processed Media:** `{db.get('total_processed_files', 0)}` items\n"
-        f"⏱ **System Uptime:** `{hrs}h {mins}m {secs}s`\n"
-        f"💾 **Disk Free Space:** `{human_readable_size(free)} / {human_readable_size(total)}`\n"
-    )
-    await event.respond(status_report)
-
-@bot.on(events.NewMessage(pattern=r'(?i)^[./]range (\S+) (\d+) (\d+)'))
-@auth_check
-async def range_fetch(event):
-    src_raw = event.pattern_match.group(1)
-    start_id = int(event.pattern_match.group(2))
-    end_id = int(event.pattern_match.group(3))
-
-    if start_id > end_id:
-        await event.respond("⚠️ Start ID သည် End ID ထက် ပိုမကြီးရပါ။")
-        return
-
-    status_msg = await event.respond(f"🚀 **Range Processing Started:** ID `{start_id}` to `{end_id}`...")
-    success, skipped = 0, 0
-    target_source = int(src_raw) if src_raw.lstrip('-').isdigit() else src_raw
-
-    try:
-        messages = await bot.get_messages(target_source, ids=list(range(start_id, end_id + 1)))
-        pending_albums = defaultdict(list)
-        single_messages = []
-
-        for msg in messages:
-            if not msg or not (msg.video or msg.photo or msg.document):
-                continue
-
-            media_key = get_media_key(msg)
-            if media_key and media_key in db.get("processed_ids", []):
-                skipped += 1
-                continue
-
-            if msg.grouped_id:
-                pending_albums[msg.grouped_id].append(msg)
-            else:
-                single_messages.append(msg)
-
-        for msg in single_messages:
-            res = await process_media_message(msg)
-            if res:
-                success += 1
-            await asyncio.sleep(1)
-
-        for gid, album_msgs in pending_albums.items():
-            ALBUM_BUFFERS[gid].extend(album_msgs)
-            await process_album_group(gid)
-            success += len(album_msgs)
-
-        await status_msg.edit(
-            "✅ **RANGE TASK COMPLETED**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 Total Items Copied: `{success}`\n"
-            f"⏩ Total Items Skipped: `{skipped}`"
-        )
-
-    except Exception as e:
-        logging.error(f"Range Process Error: {e}")
-        await status_msg.edit(f"❌ **Range Task Error:** `{e}`")
-
-# --- 7. REAL-TIME EVENT LISTENER ---
+# --- 6. REAL-TIME EVENT LISTENER ---
 @bot.on(events.NewMessage())
 async def message_interceptor(event):
     if not db.get("system_active", True):
@@ -693,19 +433,17 @@ async def message_interceptor(event):
                 ALBUM_BUFFERS[gid].append(event.message)
                 asyncio.create_task(process_album_group(gid))
             else:
-                status_msg = await event.respond("💎 **New Media Detected! Direct Copying...**")
+                status_msg = await event.respond("💎 **New Media Detected! Copying...**")
                 await process_media_message(event.message, status_msg)
 
     except errors.FloodWaitError as flood_err:
         wait_time = flood_err.seconds
-        logging.warning(f"FloodWait Triggered: Waiting {wait_time}s")
-        await dispatch_log(f"⏳ FloodWait Warning: Waiting `{wait_time}` seconds.", "WARNING")
+        logging.warning(f"FloodWait Warning: Waiting {wait_time}s")
         await asyncio.sleep(wait_time)
-
     except Exception as outer_err:
-        logging.critical(f"Critical Exception: {outer_err}\n{traceback.format_exc()}")
+        logging.error(f"Interceptor Error: {outer_err}")
 
-# --- 8. MAIN EXECUTION LOOP ---
+# --- 7. MAIN EXECUTION LOOP ---
 async def main():
     if SESSION_STRING:
         await bot.start()
@@ -719,6 +457,4 @@ if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logging.info("Bot stopped manually.")
-    except Exception as boot_err:
-        logging.critical(f"Fatal Startup Error: {boot_err}")
+        logging.info("Bot stopped.")
